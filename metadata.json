@@ -1,0 +1,6 @@
+{
+  "name": "Audio Data Labeling Tool",
+  "description": "An automated and manual audio data labeling tool featuring absolute directory scanning, sequential looped playback, waiting countdowns, clipboard monitoring, result file tracking, and CSV progress export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
