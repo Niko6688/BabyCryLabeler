@@ -29,7 +29,7 @@ import json
 import re
 import numpy as np
 
-# 自动标注系统服务器端地址 (默认 3000 端口)
+# 默认服务端地址 (将在启动时进行智能双端口 3000/3124 探测)
 SERVER_URL = "http://localhost:3000"
 
 # 预设的标记词汇映射（精确匹配图灵看护 App 界面上的高亮标签内容）
@@ -44,22 +44,59 @@ TARGET_KEYWORDS = {
 # 报警时间线匹配正则表达式：支持 "PM16:39", "PM 16:39", "16:18" 等
 TIMESTAMP_RE = re.compile(r'(?:P[MN]|A[M|N])?\s*([0-2]?\d)\s*[:：\-\.]?\s*([0-5]\d)', re.IGNORECASE)
 
-def get_screencapture_macos(output_path="/tmp/scrcpy_ocr_screenshot.png"):
+def detect_server_url():
     """
-    使用 Mac 的 screencapture 快捷截屏 (无需过高用户权限)
+    智能检测本地运行的标注系统端口 (3000 为网页开发接口 / 3124 为 Electron 打包的桌面端接口)
+    """
+    test_ports = [3000, 3124]
+    for port in test_ports:
+        url = f"http://localhost:{port}"
+        try:
+            res = requests.get(f"{url}/api/get-playback-status", timeout=1.2)
+            if res.status_code == 200:
+                print(f"🎉 [连接就绪] 智能检测并连接到服务端成功: {url}")
+                return url
+        except requests.RequestException:
+            continue
+    print("⚠️ [检测提示] 未发现正在运行的标注服务端服务 (检测端口 3000 及 3124)。将回退并默认使用 http://localhost:3000 ...")
+    return "http://localhost:3000"
+
+def get_screencapture_macos(output_path="./scrcpy_ocr_screenshot.png"):
+    """
+    智能跨平台（Windows & macOS）截图，自动选择最佳抓取引擎，免除平台依赖报错
     """
     if os.path.exists(output_path):
         try:
             os.remove(output_path)
         except OSError:
             pass
-    try:
-        # -x 执行静音截图
-        subprocess.run(["screencapture", "-x", output_path], check=True)
-        return output_path
-    except Exception as e:
-        print(f"❌ [截图错误] 无法抓取系统屏幕: {e}")
-        return None
+
+    is_windows = sys.platform.startswith('win')
+    if is_windows:
+        try:
+            from PIL import ImageGrab
+            screenshot = ImageGrab.grab()
+            screenshot.save(output_path)
+            return output_path
+        except Exception as e:
+            print(f"\n❌ [Windows 截图错误] 无法抓取完整屏幕: {e}")
+            print("   提示: 请运行 'pip install pillow' 安装截图基础库")
+            return None
+    else:
+        # macOS 平台优先使用系统级静效截图工具
+        try:
+            subprocess.run(["screencapture", "-x", output_path], check=True)
+            return output_path
+        except Exception as e:
+            # 备用方案：Pillow
+            try:
+                from PIL import ImageGrab
+                screenshot = ImageGrab.grab()
+                screenshot.save(output_path)
+                return output_path
+            except Exception as fe:
+                print(f"❌ [macOS 截图错误] 系统截屏与 Pillow 备用方案均不可用: {e} | {fe}")
+                return None
 
 def group_ocr_to_lines(ocr_results, y_threshold=28):
     """
@@ -181,6 +218,10 @@ def main():
     print(" 3. 标签安全性：智能容错，如果识别到没有附带细分标签的消息（即漏配），或 4分钟未出结果")
     print("    程序会自动执行【安全跳过】并切歌，全自动高效无人值守！")
     print("=" * 75)
+
+    # 智能探测服务端运行端口
+    global SERVER_URL
+    SERVER_URL = detect_server_url()
 
     # 加载 OCR 离线库
     try:

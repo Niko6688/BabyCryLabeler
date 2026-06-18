@@ -71,6 +71,12 @@ export default function LabelingConsole({
     };
   }, [currentFile, onSaveLabel]);
 
+  // Reset content caches when active track changes to prevent matching stale tags on a new sound clip
+  useEffect(() => {
+    setClipboardContent("");
+    setFileContent("");
+  }, [currentFile]);
+
   // Main label tag exact helper
   const tryMatchingAndLabel = (textToAnalyze: string, sourceName: string) => {
     if (!currentFile) return false;
@@ -82,6 +88,19 @@ export default function LabelingConsole({
       if (matched) {
         addLog(`从[${sourceName}]提取并匹配成功 ➔ "${details.label}"`, 'success');
         onSaveLabel(details.label);
+
+        // If matched from result.txt, automatically clear the physical file on the server
+        if (sourceName.includes("result.txt") && resultFilePath) {
+          fetch('/api/clear-file-result', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filePath: resultFilePath })
+          }).then(() => {
+            setFileContent(""); // Clear local state cache
+          }).catch(err => {
+            console.error("Failed to empty result file:", err);
+          });
+        }
         return true;
       }
     }
@@ -90,12 +109,13 @@ export default function LabelingConsole({
 
   // --- MODE 2: Clipboard monitoring (with iframe secure fallback) ---
   const checkClipboard = async () => {
+    if (!navigator.clipboard) {
+      setClipboardStatus("blocked");
+      return;
+    }
     try {
-      if (!navigator.clipboard) {
-        setClipboardStatus("blocked");
-        return;
-      }
       const text = await navigator.clipboard.readText();
+      setClipboardStatus("active");
       if (text && text !== clipboardContent) {
         setClipboardContent(text);
         const didLabel = tryMatchingAndLabel(text, "剪贴板");
@@ -106,8 +126,13 @@ export default function LabelingConsole({
           addLog(`剪贴板文本变更: "${text.substring(0, 30)}..."，未匹配到预设项`, 'info');
         }
       }
-    } catch (err) {
-      setClipboardStatus("blocked");
+    } catch (err: any) {
+      // Focus-loss or iframe constraint errors
+      if (err?.name === "NotAllowedError" || err?.message?.includes("focus") || err?.message?.includes("gesture")) {
+        setClipboardStatus("waiting_focus");
+      } else {
+        setClipboardStatus("blocked");
+      }
     }
   };
 
@@ -286,16 +311,20 @@ export default function LabelingConsole({
               <span className="text-xs font-bold text-slate-700">剪贴板半自动监听匹配</span>
               <span className="text-xs font-mono">
                 {clipboardStatus === 'active' && <span className="text-emerald-600">● 1.5s轮询检测中</span>}
+                {clipboardStatus === 'waiting_focus' && <span className="text-amber-500 animate-pulse font-semibold">● 运行中 (请点击页面聚焦)</span>}
                 {clipboardStatus === 'inactive' && <span className="text-slate-500">○ 已停用</span>}
                 {clipboardStatus === 'blocked' && <span className="text-red-500 font-semibold">⚠️ 浏览器策略或沙盒限制</span>}
               </span>
             </div>
 
-            {clipboardStatus === 'blocked' && (
+            {(clipboardStatus === 'blocked' || clipboardStatus === 'waiting_focus') && (
               <div className="bg-amber-50 text-amber-800 text-[11px] p-2 leading-normal rounded border border-amber-200/60 flex gap-2">
                 <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                 <p>
-                  由于 AI Studio 沙盒预览环境存在跨域安全保护，直接在 iframe 内访问系统剪贴板可能被拦截。可点击下方手动粘贴，或者点击“新建标签页打开”获得完整权限。
+                  {clipboardStatus === 'waiting_focus' 
+                    ? "提示: 当您切换至 scrcpy 或其他应用程序时，浏览器为了安全性会暂停剪贴板监控。请轻点一下此网页，即可瞬间重新激活高频轮询！"
+                    : "由于 AI Studio 沙盒预览环境存在跨域安全保护，直接在 iframe 内访问系统剪贴板可能被拦截。可点击下方手动粘贴，或者点击右上角“新建标签页打开”获得完整读取权限。"
+                  }
                 </p>
               </div>
             )}

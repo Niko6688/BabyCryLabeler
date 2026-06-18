@@ -162,8 +162,14 @@ async function startServer() {
       return res.status(400).json({ error: "Missing filePath or label" });
     }
 
-    const cleanedPath = path.resolve(filePath);
-    const fileName = path.basename(cleanedPath);
+    const cleanedPath = (filePath.startsWith("local-file://") || filePath.startsWith("blob:")) 
+      ? filePath 
+      : path.resolve(filePath);
+    
+    const fileName = (filePath.startsWith("local-file://") || filePath.startsWith("blob:"))
+      ? path.basename(filePath.replace("local-file://", ""))
+      : path.basename(cleanedPath);
+
     const timeString = labelTime || new Date().toISOString().replace("T", " ").substring(0, 19);
 
     // 1. Update progress.json
@@ -185,7 +191,11 @@ async function startServer() {
 
     if (fs.existsSync(csvPath)) {
       try {
-        const content = fs.readFileSync(csvPath, "utf-8");
+        let content = fs.readFileSync(csvPath, "utf-8");
+        // Remove UTF-8 BOM if present during parsing
+        if (content.startsWith("\uFEFF")) {
+          content = content.substring(1);
+        }
         const lines = content.split("\n").filter(line => line.trim() !== "");
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i];
@@ -236,7 +246,8 @@ async function startServer() {
     }
 
     // Build fresh clean CSV with enhanced columns matching the exact app notifications
-    const headers = "文件名,报警消息,标签,标注时间,文件路径";
+    // Note: We prepend the UTF-8 BOM (\uFEFF) to make it load Chinese flawlessly in Microsoft Excel on Windows
+    const headers = "\uFEFF文件名,报警消息,标签,标注时间,文件路径";
     const body = csvRows.map(r => `${r.fileName},${r.alarmMessage},${r.label},${r.time},${r.path}`).join("\n");
     fs.writeFileSync(csvPath, headers + "\n" + body + "\n", "utf-8");
 
@@ -349,6 +360,24 @@ async function startServer() {
     } catch (err) {
       return res.status(500).json({ error: "Failed to read result file" });
     }
+  });
+
+  // --- API ROUTE: Clear Result File Content ---
+  app.post("/api/clear-file-result", (req, res) => {
+    const { filePath } = req.body;
+    if (!filePath || typeof filePath !== "string") {
+      return res.status(400).json({ error: "Missing filePath parameter" });
+    }
+    const resolvedFilePath = path.resolve(filePath);
+    if (fs.existsSync(resolvedFilePath)) {
+      try {
+        fs.writeFileSync(resolvedFilePath, "", "utf-8");
+        return res.json({ success: true });
+      } catch (err) {
+        return res.status(500).json({ error: "Failed to clear result file" });
+      }
+    }
+    res.json({ success: false, message: "File not found" });
   });
 
   // --- API ROUTE: Stream Local Audio ---
