@@ -11,7 +11,9 @@
     "clean": "rm -rf dist progress.json labeled_output.csv demo_audios dist-desktop",
     "lint": "tsc --noEmit",
     "desktop:dev": "electron electron-main.cjs",
-    "desktop:build": "npm run build && electron-builder --win nsis"
+    "desktop:build": "npm run build && electron-builder",
+    "desktop:build:win": "npm run build && electron-builder --win nsis",
+    "desktop:build:mac": "npm run build && electron-builder --mac dmg"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -53,6 +55,19 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "dmg": {
+      "backgroundColor": "#0f172a",
+      "window": {
+        "width": 540,
+        "height": 380
+      }
     },
     "files": [
       "dist/**/*",
