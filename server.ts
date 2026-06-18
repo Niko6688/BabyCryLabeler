@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { fileURLToPath } from "url";
 
 // In packaged app environments, override process.cwd() gracefully to standard writable folders to avoid EACCES
@@ -17,8 +16,14 @@ if (process.env.USER_DATA_DIR) {
   process.cwd = () => targetDir;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Define safe ESM / CommonJS path resolvers without variable redeclaration collisions in Node/Electron environment
+const currentFilename = typeof __filename !== "undefined"
+  ? __filename
+  : fileURLToPath(import.meta.url || "file:");
+
+const currentDirname = typeof __dirname !== "undefined"
+  ? __dirname
+  : path.dirname(currentFilename);
 
 async function startServer() {
   const app = express();
@@ -552,6 +557,7 @@ async function startServer() {
 
   // --- VITE DEV / PRODUCTION MIDDLEWARE ---
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -562,10 +568,10 @@ async function startServer() {
     let distPath = path.join(process.cwd(), "dist");
     if (!fs.existsSync(path.join(distPath, "index.html"))) {
       // In packaged environment, server.cjs and index.html are compiled bundle neighbors
-      distPath = __dirname;
+      distPath = currentDirname;
     }
     if (!fs.existsSync(path.join(distPath, "index.html"))) {
-      distPath = path.join(__dirname, "dist");
+      distPath = path.join(currentDirname, "dist");
     }
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
