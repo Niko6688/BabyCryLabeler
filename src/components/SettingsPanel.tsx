@@ -168,15 +168,17 @@ export default function SettingsPanel({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
+      const capturedFiles = Array.from(e.target.files) as File[];
+      const targetInput = e.target;
+      
       if (onUploadLocalAudios) {
         setIsBrowserLoading(true);
         setBrowserLoadCount(0);
         
         // Defer parsing slightly so the CSS loader gets painted first
         setTimeout(() => {
-          const fileList: File[] = Array.from(e.target.files || []);
           const supported = ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac'];
-          const list = fileList.filter((f: File) => {
+          const list = capturedFiles.filter((f: File) => {
             const ext = f.name.split('.').pop()?.toLowerCase();
             return ext && supported.includes(ext);
           });
@@ -186,6 +188,12 @@ export default function SettingsPanel({
             onUploadLocalAudios(list);
           } else {
             alert("没有检测到合规的音频文件 (.mp3, .wav, .m4a, .ogg, .flac, .aac)！");
+          }
+          // Reset input value after deferred parsing completes so the change handler triggers on identical selection next time
+          try {
+            targetInput.value = '';
+          } catch (err) {
+            console.error("Error resetting file input value:", err);
           }
         }, 150);
       }
