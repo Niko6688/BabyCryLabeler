@@ -10,6 +10,7 @@ import SettingsPanel from './components/SettingsPanel';
 import AudioPlayer from './components/AudioPlayer';
 import LabelingConsole from './components/LabelingConsole';
 import QueueList from './components/QueueList';
+import StatisticsDashboard from './components/StatisticsDashboard';
 import { registerLocalFiles, clearAllLocalFiles } from './lib/localFilesRegistry';
 
 export default function App() {
@@ -426,6 +427,11 @@ export default function App() {
             playbackMode={playbackMode}
             setPlaybackMode={setPlaybackMode}
             onClearFiles={handleClearLoadedAudios}
+          />
+
+          <StatisticsDashboard
+            files={files}
+            progress={progress}
           />
         </div>
 
