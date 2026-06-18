@@ -9,6 +9,17 @@ let mainWindow = null;
 const isProd = app.isPackaged;
 
 function startBackend() {
+  const fs = require('fs');
+  // Determine an absolutely safe and writable directory under the user's home folder for standard operations
+  const userDataDir = path.join(app.getPath('home'), 'BabyCryLabeler_Data');
+  if (!fs.existsSync(userDataDir)) {
+    try {
+      fs.mkdirSync(userDataDir, { recursive: true });
+    } catch (e) {
+      console.error('Failed to create user data directory:', e);
+    }
+  }
+
   if (isProd) {
     // In production, run the bundled, self-contained distributor server
     const serverPath = path.join(__dirname, 'dist', 'server.cjs');
@@ -16,7 +27,8 @@ function startBackend() {
       env: {
         ...process.env,
         NODE_ENV: 'production',
-        PORT: '3124' // Use separate port in desktop shell to prevent 3000 collision
+        PORT: '3124', // Use separate port in desktop shell to prevent 3000 collision
+        USER_DATA_DIR: userDataDir
       }
     });
   } else {
@@ -29,7 +41,8 @@ function startBackend() {
         env: {
           ...process.env,
           NODE_ENV: 'development',
-          PORT: '3124'
+          PORT: '3124',
+          USER_DATA_DIR: userDataDir
         }
       }
     );
@@ -37,6 +50,18 @@ function startBackend() {
 
   serverProcess.on('error', (err) => {
     console.error('Failed to start native labeling server backend process:', err);
+  });
+
+  serverProcess.on('exit', (code, signal) => {
+    console.error(`Backend process exited with code ${code}, signal ${signal}`);
+    // If backend process crashes or exits unexpectedly, show an explicit dialog so the user is informed
+    if (code !== null && code !== 0 && signal !== 'SIGTERM') {
+      const { dialog } = require('electron');
+      dialog.showErrorBox(
+        '后台服务进程发生意外中断 (Backend Server Error)',
+        `标注系统的后台逻辑引擎在启动或运行中遭遇故障并退出 (ErrorCode: ${code} / Signal: ${signal})。\n\n这可能由以下原因引起：\n1. 您的 3124 本地服务端口已被其他软件占用；\n2. 该软件缺少执行当前操作的读写权限。`
+      );
+    }
   });
 }
 

@@ -13,7 +13,8 @@
     "desktop:dev": "electron electron-main.cjs",
     "desktop:build": "npm run build && electron-builder",
     "desktop:build:win": "npm run build && electron-builder --win nsis",
-    "desktop:build:mac": "npm run build && electron-builder --mac dmg"
+    "desktop:build:mac": "npm run build && electron-builder --mac dmg",
+    "uninstall": "node clean-uninstall.js"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

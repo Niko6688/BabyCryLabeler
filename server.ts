@@ -4,6 +4,19 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { fileURLToPath } from "url";
 
+// In packaged app environments, override process.cwd() gracefully to standard writable folders to avoid EACCES
+if (process.env.USER_DATA_DIR) {
+  const targetDir = path.resolve(process.env.USER_DATA_DIR);
+  if (!fs.existsSync(targetDir)) {
+    try {
+      fs.mkdirSync(targetDir, { recursive: true });
+    } catch (e) {
+      console.error('Failed to pre-create environment directories:', e);
+    }
+  }
+  process.cwd = () => targetDir;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -545,7 +558,15 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    // Dynamically locate the production index.html and assets directory even if process.cwd() is overridden
+    let distPath = path.join(process.cwd(), "dist");
+    if (!fs.existsSync(path.join(distPath, "index.html"))) {
+      // In packaged environment, server.cjs and index.html are compiled bundle neighbors
+      distPath = __dirname;
+    }
+    if (!fs.existsSync(path.join(distPath, "index.html"))) {
+      distPath = path.join(__dirname, "dist");
+    }
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
