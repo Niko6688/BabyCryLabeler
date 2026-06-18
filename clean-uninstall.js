@@ -43,12 +43,29 @@ console.log(`1. 软件应用程序目录:  ${pathsToClean.appBinary}`);
 console.log(`2. 缓存配置与日志目录: ${pathsToClean.appSupport}`);
 console.log(`3. 标注数据(CSV/JSON): ${pathsToClean.labeledData}\n`);
 
+// Recursively check if a path exists (handles broken symlinks as well)
+function pathExists(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 // Recursive delete helper to work across Node.js versions
 function deleteRecursive(itemPath) {
-  if (!fs.existsSync(itemPath)) return false;
+  if (!pathExists(itemPath)) return false;
   
   try {
-    const stat = fs.statSync(itemPath);
+    // 1. Prefer modern robust Node.js native API if available
+    if (typeof fs.rmSync === 'function') {
+      fs.rmSync(itemPath, { recursive: true, force: true });
+      return true;
+    }
+    
+    // 2. Safe custom fallback handling symlinks without resolving target paths
+    const stat = fs.lstatSync(itemPath);
     if (stat.isDirectory()) {
       const files = fs.readdirSync(itemPath);
       for (const file of files) {
