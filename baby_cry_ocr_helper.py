@@ -151,8 +151,6 @@ def extract_timeline_alarms(lines):
     并自动通过手机顶部状态栏，校正它与电脑的微弱时间差
     """
     alarms = []
-    current_time_minutes = None
-    current_time_str = None
     
     # 1. 自动查询手机顶部状态栏的参考时间（一般位于 Y 轴十分靠上的区域 < 110px）
     phone_status_time_min = None
@@ -177,40 +175,48 @@ def extract_timeline_alarms(lines):
             
         line_text = " ".join([it['text'] for it in line])
         
-        # 判断本行是否是单独的时间戳（报警信息的时间一般单独占一行，如 PM16:39）
+        # 寻找本行中的时间戳
         match = TIMESTAMP_RE.search(line_text)
-        if match and len(line_text.replace(" ", "")) < 12:
+        if match:
             try:
                 h = int(match.group(1))
                 m = int(match.group(2))
                 current_time_minutes = h * 60 + m
                 current_time_str = f"{h:02d}:{m:02d}"
-                # 创建一个时间锚点
+                
+                # 判断当前行是否包含 "宝宝哭了"
+                detected_label = None
+                if "宝宝哭了" in line_text:
+                    for key, keywords in TARGET_KEYWORDS.items():
+                        for kw in keywords:
+                            if kw in line_text:
+                                detected_label = key
+                                break
+                        if detected_label:
+                            break
+                            
+                # 将此报警记录存入列表
                 alarms.append({
                     'time_minutes': current_time_minutes,
                     'time_str': current_time_str,
-                    'label': None,
+                    'label': detected_label,
                     'y': line[0]['cy']
                 })
-                continue
-            except:
+            except Exception as e:
                 pass
-        
-        # 匹配到“宝宝哭了”事件
-        if current_time_minutes is not None and "宝宝哭了" in line_text:
-            detected_label = None
-            for key, keywords in TARGET_KEYWORDS.items():
-                for kw in keywords:
-                    if kw in line_text:
-                        detected_label = key
+        else:
+            # 如果本行无时间戳，但属于一个没有特定标签事件的后续，且有“宝宝哭了”字样：
+            if "宝宝哭了" in line_text and alarms:
+                detected_label = None
+                for key, keywords in TARGET_KEYWORDS.items():
+                    for kw in keywords:
+                        if kw in line_text:
+                            detected_label = key
+                            break
+                    if detected_label:
                         break
-                if detected_label:
-                    break
-            
-            # 更新此报警块的标注结果
-            if detected_label and alarms:
-                # 关联到最近捕获的时间锚点
-                alarms[-1]['label'] = detected_label
+                if detected_label and alarms[-1]['label'] is None:
+                    alarms[-1]['label'] = detected_label
 
     return alarms, phone_status_time_min
 
