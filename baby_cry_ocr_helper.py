@@ -101,6 +101,10 @@ def get_window_rect():
     智能检测投屏窗口的坐标和大小，支持 Windows 和 macOS
     """
     keywords = ["PGT-AN00", "scrcpy", "tuya", "PGT-ANOO", "手机投屏", "PGT"]
+    exclude_keywords = [
+        "baby_cry_ocr_helper", "ocr_helper", "terminal", "iterm", "visual studio", "vscode", 
+        "cursor", "python", "venv", "cmd.exe", "powershell", "bash", "zsh", "sublime", "xcode"
+    ]
     is_windows = sys.platform.startswith('win')
     
     if is_windows:
@@ -129,6 +133,16 @@ def get_window_rect():
                         buffer = ctypes.create_unicode_buffer(length + 1)
                         user32.GetWindowTextW(hwnd, buffer, length + 1)
                         title = buffer.value
+                        
+                        # 排除终端、IDE、及辅助脚本窗口，防止它们由于含‘scrcpy’关键字而被误捕获
+                        is_excluded = False
+                        for ex in exclude_keywords:
+                            if ex.lower() in title.lower():
+                                is_excluded = True
+                                break
+                        if is_excluded:
+                            return True
+                            
                         if any(kw.lower() in title.lower() for kw in keywords):
                             rect = wintypes.RECT()
                             if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
@@ -154,6 +168,16 @@ def get_window_rect():
                 title = window.get('kCGWindowName', '') or ''
                 owner_name = window.get('kCGWindowOwnerName', '') or ''
                 full_title = f"{owner_name} {title}"
+                
+                # 用户终端、编辑器等强力排除逻辑（防止抓了运行命令或显示本脚本内容的窗口本身）
+                is_excluded = False
+                for ex in exclude_keywords:
+                    if ex.lower() in full_title.lower() or ex.lower() in owner_name.lower():
+                        is_excluded = True
+                        break
+                if is_excluded:
+                    continue
+                    
                 if any(kw.lower() in full_title.lower() for kw in keywords):
                     bounds = window.get('kCGWindowBounds', {})
                     x = int(bounds.get('X', 0))
@@ -174,29 +198,42 @@ def get_window_rect():
             set procList to (every process whose visible is true)
             repeat with p in procList
                 try
-                    set winList to every window of p
-                    repeat with w in winList
-                        try
-                            set wTitle to name of w
-                            if wTitle is missing value or wTitle is "" then
-                                set wTitle to title of w
-                            end if
-                            if wTitle is not missing value and wTitle is not "" then
-                                set isMatch to false
-                                '''
+                    set pName to name of p
+                    -- 如果是终端、编辑器或系统Finder等，直接忽略，避免由于终端标题含‘scrcpy’等而被当作投屏载入
+                    if pName is not "Terminal" and pName is not "iTerm" and pName is not "iTerm2" and pName is not "Visual Studio Code" and pName is not "Code" and pName is not "Cursor" and pName is not "Finder" then
+                        set winList to every window of p
+                        repeat with w in winList
+                            try
+                                set wTitle to name of w
+                                if wTitle is missing value or wTitle is "" then
+                                    set wTitle to title of w
+                                end if
+                                if wTitle is not missing value and wTitle is not "" then
+                                    set isMatch to false
+                                    set isExclude to false
+                                    
+                                    -- 对标题包含排除语素的做双保险核对
+                                    if wTitle contains "baby_cry_ocr_helper" or wTitle contains "ocr_helper" or wTitle contains "Terminal" or wTitle contains "iTerm" or wTitle contains "Visual Studio" or wTitle contains "Code" or wTitle contains "Cursor" or wTitle contains "python" or wTitle contains "venv" then
+                                        set isExclude to true
+                                    end if
+                                    
+                                    if not isExclude then
+                                        '''
         for kw in keywords:
-            script += f'\n                                if wTitle contains "{kw}" then set isMatch to true'
+            script += f'\n                                        if wTitle contains "{kw}" then set isMatch to true'
         
         script += '''
-                                if isMatch then
-                                    set winPos to position of w
-                                    set winSize to size of w
-                                    set matchedWindow to (item 1 of winPos as string) & "," & (item 2 of winPos as string) & "," & (item 1 of winSize as string) & "," & (item 2 of winSize as string) & "," & wTitle
-                                    return matchedWindow
+                                        if isMatch then
+                                            set winPos to position of w
+                                            set winSize to size of w
+                                            set matchedWindow to (item 1 of winPos as string) & "," & (item 2 of winPos as string) & "," & (item 1 of winSize as string) & "," & (item 2 of winSize as string) & "," & wTitle
+                                            return matchedWindow
+                                        end if
+                                    end if
                                 end if
-                            end if
-                        end try
-                    end repeat
+                            end try
+                        end repeat
+                    end if
                 end try
             end repeat
             return "None"
@@ -233,16 +270,22 @@ def get_virtual_screen_size():
         except Exception:
             pass
     else:
-        # macOS 使用 osascript 获取主屏幕大小
-        script = 'tell application "System Events" to get size of item 1 of desktops'
-        try:
-            res = subprocess.check_output(["osascript", "-e", script], text=True).strip()
-            if res:
-                parts = [int(x.strip()) for x in res.split(",")]
-                if len(parts) == 2:
-                    return parts[0], parts[1]
-        except Exception:
-            pass
+        # macOS 尝试几种高兼容性脚本，Finder 范围是最稳定的不需要 App Sandbox 权限也能读取的
+        scripts = [
+            ('tell application "Finder" to get bounds of window of desktop', True),  # True 代表返回 {left, top, right, bottom}
+            ('tell application "System Events" to get size of item 1 of desktops', False) # False 代表返回 {width, height}
+        ]
+        for script, is_bounds in scripts:
+            try:
+                res = subprocess.check_output(["osascript", "-e", script], text=True).strip()
+                if res:
+                    parts = [int(x.strip()) for x in res.split(",")]
+                    if is_bounds and len(parts) == 4:
+                        return parts[2], parts[3]
+                    elif not is_bounds and len(parts) == 2:
+                        return parts[0], parts[1]
+            except Exception:
+                pass
     return None
 
 def get_screencapture_macos(output_path="./scrcpy_ocr_screenshot.png"):
