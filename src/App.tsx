@@ -38,7 +38,7 @@ export default function App() {
 
   // Selection configurations
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('order');
-  const [labelMode, setLabelMode] = useState<LabelMode>('manual');
+  const [labelMode, setLabelMode] = useState<LabelMode>('direct');
 
   // Timers
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -454,7 +454,9 @@ export default function App() {
           {/* Dedicated Manual & Automatic Matcher consoles */}
           <LabelingConsole
             currentFile={currentFile}
+            isPlaying={isPlaying}
             onSaveLabel={handleSaveLabel}
+            onSkip={handleSkipTrack}
             labelMode={labelMode}
             setLabelMode={setLabelMode}
             resultFilePath={resultFilePath}

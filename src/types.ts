@@ -45,7 +45,7 @@ export const LABELS: Record<LabelKey, { label: string; color: string; keys: stri
   }
 };
 
-export type LabelMode = 'manual' | 'clipboard' | 'file';
+export type LabelMode = 'manual' | 'direct' | 'clipboard' | 'file';
 
 export type PlaybackMode = 'order' | 'random';
 

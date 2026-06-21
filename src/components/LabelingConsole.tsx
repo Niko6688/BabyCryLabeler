@@ -9,7 +9,9 @@ import { LABELS, LabelKey, LabelMode, AudioFile } from '../types';
 
 interface LabelingConsoleProps {
   currentFile: AudioFile | null;
+  isPlaying: boolean;
   onSaveLabel: (label: string) => void;
+  onSkip?: () => void;
   labelMode: LabelMode;
   setLabelMode: (mode: LabelMode) => void;
   resultFilePath: string;
@@ -18,12 +20,15 @@ interface LabelingConsoleProps {
 
 export default function LabelingConsole({
   currentFile,
+  isPlaying,
   onSaveLabel,
+  onSkip,
   labelMode,
   setLabelMode,
   resultFilePath,
   isWaitingInterval
 }: LabelingConsoleProps) {
+  const [directStatus, setDirectStatus] = useState<'connected' | 'disconnected' | 'error'>("disconnected");
   const [clipboardStatus, setClipboardStatus] = useState<string>("inactive"); // active, inactive, blocked
   const [clipboardContent, setClipboardContent] = useState<string>("");
   const [manualPasteText, setManualPasteText] = useState<string>("");
@@ -35,6 +40,7 @@ export default function LabelingConsole({
     !window.location.hostname.includes('localhost') && 
     !window.location.hostname.includes('127.0.0.1');
 
+  const directTimerRef = useRef<NodeJS.Timeout | null>(null);
   const clipboardTimerRef = useRef<NodeJS.Timeout | null>(null);
   const fileTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -86,7 +92,29 @@ export default function LabelingConsole({
     if (!currentFile) return false;
     if (!textToAnalyze.trim()) return false;
 
-    const lowerText = textToAnalyze.toLowerCase();
+    const lowerText = textToAnalyze.toLowerCase().trim();
+    
+    // Check for skip command
+    if (lowerText === "skip" || lowerText === "跳过" || lowerText === "自动跳过" || lowerText === "skip_track") {
+      addLog(`从[${sourceName}]提取出跳过指令 ➔ 自动跳过并播放下一首`, 'warn');
+      if (onSkip) {
+        onSkip();
+      }
+      // If matched from result.txt, automatically clear the physical file on the server
+      if (sourceName.includes("result.txt") && resultFilePath) {
+        fetch('/api/clear-file-result', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath: resultFilePath })
+        }).then(() => {
+          setFileContent(""); // Clear local state cache
+        }).catch(err => {
+          console.error("Failed to empty result file:", err);
+        });
+      }
+      return true;
+    }
+
     for (const [_, details] of Object.entries(LABELS)) {
       const matched = details.keywords.some(kw => lowerText.includes(kw.toLowerCase()));
       if (matched) {
@@ -110,6 +138,55 @@ export default function LabelingConsole({
     }
     return false;
   };
+
+  // --- MODE 1.5: Direct Local Helper Mode (No focus required, automatic background syncer) ---
+  const checkDirectHelper = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:3124/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          isPlaying,
+          isWaitingInterval,
+          currentFile
+        }),
+        // Avoid sending credentials to localhost
+        credentials: 'omit'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setDirectStatus("connected");
+        if (data.label) {
+          addLog(`从[本地直连助手]自动匹配成功 ➔ "${data.label}"`, 'success');
+          onSaveLabel(data.label);
+        } else if (data.skip) {
+          addLog(`从[本地直连助手]接收到跳过音轨指令`, 'warn');
+          if (onSkip) onSkip();
+        }
+      } else {
+        setDirectStatus("error");
+      }
+    } catch (err) {
+      setDirectStatus("error");
+    }
+  };
+
+  useEffect(() => {
+    if (labelMode === "direct" && currentFile) {
+      addLog("已开启本地助手直连接收模式（推荐：高稳定/免聚焦/全自动）", 'info');
+      checkDirectHelper(); // Run once immediately
+      directTimerRef.current = setInterval(checkDirectHelper, 1500);
+    } else {
+      if (directTimerRef.current) {
+        clearInterval(directTimerRef.current);
+      }
+      setDirectStatus("disconnected");
+    }
+
+    return () => {
+      if (directTimerRef.current) clearInterval(directTimerRef.current);
+    };
+  }, [labelMode, currentFile, isPlaying, isWaitingInterval]);
 
   // --- MODE 2: Clipboard monitoring (with iframe secure fallback) ---
   const checkClipboard = async () => {
@@ -141,7 +218,7 @@ export default function LabelingConsole({
   };
 
   useEffect(() => {
-    if (labelMode === "clipboard" && currentFile && !isWaitingInterval) {
+    if (labelMode === "clipboard" && currentFile) {
       setClipboardStatus("active");
       addLog("已开启剪贴板半自动模式（支持轮询提取）", 'info');
       // Set recursive interval timer for clipboard read
@@ -156,7 +233,7 @@ export default function LabelingConsole({
     return () => {
       if (clipboardTimerRef.current) clearInterval(clipboardTimerRef.current);
     };
-  }, [labelMode, currentFile, clipboardContent, isWaitingInterval]);
+  }, [labelMode, currentFile, clipboardContent]);
 
   // --- MODE 3: File monitoring (`result.txt` on the Node.js server system) ---
   const checkResultFile = async () => {
@@ -184,7 +261,7 @@ export default function LabelingConsole({
   };
 
   useEffect(() => {
-    if (labelMode === "file" && currentFile && !isWaitingInterval) {
+    if (labelMode === "file" && currentFile) {
       addLog(`已开启服务端 result.txt 文件监听（全自动）`, 'info');
       checkResultFile(); // instant first tick
       fileTimerRef.current = setInterval(checkResultFile, 1500);
@@ -198,7 +275,7 @@ export default function LabelingConsole({
     return () => {
       if (fileTimerRef.current) clearInterval(fileTimerRef.current);
     };
-  }, [labelMode, currentFile, fileContent, resultFilePath, isWaitingInterval]);
+  }, [labelMode, currentFile, fileContent, resultFilePath]);
 
   // Handle manual mock clipboard analysis submissions (iframe friendly)
   const handleManualPasteSubmit = (e: React.FormEvent) => {
@@ -229,7 +306,7 @@ export default function LabelingConsole({
       </div>
 
       {/* Mode Switches */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {/* Mode 1: Manual */}
         <button
           type="button"
@@ -245,19 +322,37 @@ export default function LabelingConsole({
           <span className="text-[9px] text-slate-400">键盘快捷键或点选</span>
         </button>
 
+        {/* Mode 1.5: Direct Local Helper */}
+        <button
+          type="button"
+          onClick={() => setLabelMode('direct')}
+          className={`flex flex-col items-center p-3 rounded-lg border transition-all text-center gap-1 cursor-pointer ${
+            labelMode === 'direct'
+              ? 'border-emerald-600 bg-emerald-50/50 text-emerald-900 shadow-3xs'
+              : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+          }`}
+        >
+          <Radio className={`w-4 h-4 ${labelMode === 'direct' ? 'text-emerald-600 animate-pulse' : 'text-slate-400'}`} />
+          <span className="text-xs font-semibold flex items-center gap-1">
+            2. 助手直连模式
+            <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 rounded-sm">推荐</span>
+          </span>
+          <span className="text-[9px] text-slate-400">免剪贴板 免聚焦 全自动</span>
+        </button>
+
         {/* Mode 2: Clipboard */}
         <button
           type="button"
           onClick={() => setLabelMode('clipboard')}
           className={`flex flex-col items-center p-3 rounded-lg border transition-all text-center gap-1 cursor-pointer ${
             labelMode === 'clipboard'
-              ? 'border-indigo-600 bg-indigo-50/50 text-indigo-900 shadow-3xs'
+              ? 'border-slate-400 bg-slate-50 text-slate-900'
               : 'border-slate-200 hover:bg-slate-50 text-slate-600'
           }`}
         >
-          <Clipboard className={`w-4 h-4 ${labelMode === 'clipboard' ? 'text-indigo-600' : 'text-slate-400'}`} />
-          <span className="text-xs font-semibold">2. 剪贴板模式</span>
-          <span className="text-[9px] text-slate-400">AI支持复制结果</span>
+          <Clipboard className={`w-4 h-4 ${labelMode === 'clipboard' ? 'text-slate-800' : 'text-slate-400'}`} />
+          <span className="text-xs font-semibold">3. 剪贴板模式</span>
+          <span className="text-[9px] text-slate-400">支持复制/备份粘贴</span>
         </button>
 
         {/* Mode 3: File Listener */}
@@ -271,7 +366,7 @@ export default function LabelingConsole({
           }`}
         >
           <FileText className={`w-4 h-4 ${labelMode === 'file' ? 'text-indigo-600' : 'text-slate-400'}`} />
-          <span className="text-xs font-semibold">3. 文件监听模式</span>
+          <span className="text-xs font-semibold">4. 文件监听模式</span>
           <span className="text-[9px] text-slate-400">实时读取 result.txt</span>
         </button>
       </div>
@@ -305,6 +400,45 @@ export default function LabelingConsole({
                   </div>
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {labelMode === 'direct' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700">🚀 本地助手智能直连服务 (免剪贴板/免聚焦)</span>
+              <span className="text-xs font-mono">
+                {directStatus === 'connected' && <span className="text-emerald-600 font-semibold animate-pulse">● 助手已连接</span>}
+                {directStatus === 'disconnected' && <span className="text-slate-500">○ 正在等待连接...</span>}
+                {directStatus === 'error' && <span className="text-amber-500 font-medium">⚠️ 尝试连接本地 127.0.0.1:3124</span>}
+              </span>
+            </div>
+
+            {directStatus !== 'connected' ? (
+              <div className="bg-amber-50/80 text-amber-800 text-[11px] p-3 leading-relaxed rounded-lg border border-amber-200/50 space-y-1.5">
+                <p className="font-semibold text-amber-900 flex items-center gap-1">
+                  🔧 未检测到本地智能助手连接：
+                </p>
+                <p>
+                  由于浏览器对系统剪贴板有着极高安全限制（窗口失去焦点、或身处预览 iframe 内时会自动<b>拒绝读取</b>），我们<b>独家支持不依赖剪贴板的“100%自动直连通道”</b>！
+                </p>
+                <p className="text-slate-650">
+                  您只需执行最新版本的本地脚本，它会自动通过本地回环网络开启轻量的 API 服务，由网页自动从其收发状态并全自动极速标注。
+                </p>
+              </div>
+            ) : (
+              <div className="bg-emerald-50/55 text-emerald-800 text-[11px] p-3 leading-relaxed rounded-lg border border-emerald-200/50 space-y-1">
+                <p className="font-semibold text-emerald-900">✨ 自动直连服务已成功激活！</p>
+                <p>网页正在与您本地的 Python 脚本高频双向。在音轨进入间隔期（Waiting Interval）时，本地脚本会自动提取手机屏幕文字，解析出标签后立即直接通知网页自动标注、切歌，即使网页在后台也能完美畅快运行！</p>
+              </div>
+            )}
+
+            <div className="text-[10px] text-slate-500 font-mono bg-white p-2.5 rounded-lg border border-slate-100 flex flex-col gap-1">
+              <div className="flex justify-between">
+                <span>直连回环 API 端点: <code className="text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded font-mono">http://127.0.0.1:3124/sync</code></span>
+                <span className="text-[9px] text-slate-400">（不流经公网，保障隐私，0 延迟）</span>
+              </div>
             </div>
           </div>
         )}
