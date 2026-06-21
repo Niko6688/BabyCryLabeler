@@ -30,6 +30,10 @@ export default function LabelingConsole({
   const [fileContent, setFileContent] = useState<string>("");
   const [fileStatus, setFileStatus] = useState<string>("disconnected"); // connected, disconnected, error
   const [logs, setLogs] = useState<Array<{ time: string; text: string; type: 'info' | 'success' | 'warn' }>>([]);
+  
+  const isCloudEnv = typeof window !== 'undefined' && 
+    !window.location.hostname.includes('localhost') && 
+    !window.location.hostname.includes('127.0.0.1');
 
   const clipboardTimerRef = useRef<NodeJS.Timeout | null>(null);
   const fileTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -359,25 +363,49 @@ export default function LabelingConsole({
         {labelMode === 'file' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-700 font-mono">文件轮询结果监听器 (result.txt)</span>
+              <span className="text-xs font-bold text-slate-700 font-mono">
+                {isCloudEnv ? "☁️ 云端 API 自动化接收" : "文件轮询结果监听器 (result.txt)"}
+              </span>
               <span>
-                {fileStatus === 'connected' && <span className="text-emerald-600 text-xs font-mono">● 监听中 | 连接正常</span>}
-                {fileStatus === 'disconnected' && <span className="text-slate-500 text-xs font-mono">○ 未找到目标文件</span>}
-                {fileStatus === 'error' && <span className="text-red-500 text-xs font-semibold font-mono">⚠️ 读取异常</span>}
+                {isCloudEnv ? (
+                  <span className="text-indigo-600 text-[10px] font-bold font-mono animate-pulse bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full select-none">
+                    ● 云网关就绪 (免文件同步)
+                  </span>
+                ) : (
+                  <>
+                    {fileStatus === 'connected' && <span className="text-emerald-600 text-xs font-mono">● 监听中 | 连接正常</span>}
+                    {fileStatus === 'disconnected' && <span className="text-slate-500 text-xs font-mono">○ 未找到目标文件</span>}
+                    {fileStatus === 'error' && <span className="text-red-500 text-xs font-semibold font-mono">⚠️ 读取异常</span>}
+                  </>
+                )}
               </span>
             </div>
 
-            <p className="text-[11px] text-slate-500">
-              请确保目标应用程序将结果实时写入指定目录。
-              当前已加载内容: <code className="bg-slate-200/70 border px-1.5 py-0.5 rounded font-mono text-slate-800">{fileContent || "(等待写入...)"}</code>
-            </p>
+            {isCloudEnv ? (
+              <div className="text-[11px] text-slate-600 font-normal leading-relaxed space-y-1.5 bg-indigo-50/30 p-3 rounded-lg border border-indigo-100/50">
+                <p>
+                  🚀 <b>云同步运行中：</b>因浏览器处于沙盒环境，本地 Python 脚本启动后遇到报警会直接通过安全网关 HTTP API <strong>向本网页实时交互与标注控制</strong>，因此即便处于云端预览也可无阻使用！
+                </p>
+                <div className="text-[10px] text-indigo-900 bg-white border border-indigo-100/60 p-2 rounded-md font-mono select-all select-none">
+                  请确保本地 <code>baby_cry_ocr_helper.py</code> 顶部配置为：<br/>
+                  <strong className="text-indigo-600 block mt-1 break-all select-all">SERVER_URL = "{window.location.origin}"</strong>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="text-[11px] text-slate-500">
+                  请确保目标应用程序将结果实时写入指定目录。
+                  当前已加载内容: <code className="bg-slate-200/70 border px-1.5 py-0.5 rounded font-mono text-slate-800">{fileContent || "(等待写入...)"}</code>
+                </p>
 
-            <div className="flex gap-2 text-[10px] bg-sky-50 text-sky-800 p-2.5 rounded border border-sky-100 flex-col md:flex-row justify-between items-stretch md:items-center">
-              <span className="font-semibold">💡 演示验证提示:</span>
-              <span className="leading-normal">
-                为了测试这个功能，您可以选择 Demo 文件夹 <code>./demo_audios/result.txt</code> 并写入任意预设文本即可直接进行自动匹配打标签。
-              </span>
-            </div>
+                <div className="flex gap-2 text-[10px] bg-sky-50 text-sky-800 p-2.5 rounded border border-sky-100 flex-col md:flex-row justify-between items-stretch md:items-center">
+                  <span className="font-semibold">💡 演示验证提示:</span>
+                  <span className="leading-normal">
+                    为了测试这个功能，您可以选择 Demo 文件夹 <code>./demo_audios/result.txt</code> 并写入任意预设文本即可直接进行自动匹配打标签。
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

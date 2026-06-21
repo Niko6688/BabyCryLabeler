@@ -48,6 +48,12 @@ def detect_server_url():
     """
     智能检测本地运行的标注系统端口 (3000 为网页开发接口 / 3124 为 Electron 打包的桌面端接口)
     """
+    global SERVER_URL
+    # 若用户手动定义了非本地回环地址（如云端 API 或局域网/内网 IP 等），直接予以最高优先级放行，不再强行回退 localhost。
+    if SERVER_URL and ("localhost" not in SERVER_URL) and ("127.0.0.1" not in SERVER_URL):
+        print(f"🌐 [云端模式] 正在连接自定义云端服务端 ➔ {SERVER_URL}")
+        return SERVER_URL
+
     test_ports = [3000, 3124]
     for port in test_ports:
         url = f"http://localhost:{port}"
