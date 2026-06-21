@@ -609,8 +609,22 @@ def extract_timeline_alarms(lines, ocr_res=None):
                 try:
                     ph = int(m.group(1))
                     pm = int(m.group(2))
-                    phone_status_time_min = ph * 60 + pm
-                    break
+                    pmin = ph * 60 + pm
+                    
+                    # 强力时针对齐安全清洗验证：手机与运行脚本的电脑几乎必然在同一时区（大体对齐，绝对误差通常极小）
+                    # 如果抓取到的时间离电脑本地当前时间差距超过了 30 分钟，100% 是 OCR 把电量、网速等杂波数字误解析为了状态栏时钟
+                    t_now = time.localtime()
+                    local_min = t_now.tm_hour * 60 + t_now.tm_min
+                    diff = pmin - local_min
+                    # 考虑跨午夜情况
+                    if diff > 720: diff -= 1440
+                    if diff < -720: diff += 1440
+                    
+                    if abs(diff) <= 30:
+                        phone_status_time_min = pmin
+                        break
+                    else:
+                        print(f"   ⚠️ [状态栏时钟清洗] 状态栏疑似识别到干扰读数 '{item['text']}' -> {ph:02d}:{pm:02d}。与本地电脑时间差较远 ({diff}分钟)，已判定为 OCR 误识杂音予以过滤。")
                 except:
                     pass
 
@@ -954,7 +968,15 @@ def main():
 
                 time_drift = 0
                 if phone_clock_min is not None:
-                    time_drift = phone_clock_min - now_comp_min
+                    drift_temp = phone_clock_min - now_comp_min
+                    # 消除跨天带来的 1440 分钟时差跳变
+                    if drift_temp > 720: drift_temp -= 1440
+                    if drift_temp < -720: drift_temp += 1440
+                    
+                    if abs(drift_temp) <= 30:
+                        time_drift = drift_temp
+                    else:
+                        print(f"   ⚠️ [对齐容错] 计算出的偏差绝对值过大 ({drift_temp} 分钟)，判定为无效时间偏置。强制重置为 0 偏置安全运行。")
 
                 phone_earliest_min = (track_start_min + time_drift - 1) % 1440
                 phone_latest_min = (now_comp_min + time_drift + 2) % 1440
@@ -1105,7 +1127,14 @@ def main():
                     if phone_clock_min is not None:
                         t_now = time.localtime()
                         comp_now_min = t_now.tm_hour * 60 + t_now.tm_min
-                        time_drift = phone_clock_min - comp_now_min
+                        drift_temp = phone_clock_min - comp_now_min
+                        if drift_temp > 720: drift_temp -= 1440
+                        if drift_temp < -720: drift_temp += 1440
+                        
+                        if abs(drift_temp) <= 30:
+                            time_drift = drift_temp
+                        else:
+                            print(f"   ⚠️ [对齐容错] 计算出的偏差绝对值过大 ({drift_temp} 分钟)，判定为无效时间偏置。强制重置为 0 偏置安全运行。")
 
                     phone_earliest_min = (track_start_system_minutes + time_drift - 1) % 1440
                     phone_latest_min = (now_comp_min + time_drift + 2) % 1440
