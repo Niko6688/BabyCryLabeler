@@ -33,6 +33,18 @@ async function startServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
+  // Helper to prevent path traversal / directory escaping
+  function getSafePath(inputPath: string): string | null {
+    if (!inputPath) return null;
+    const resolved = path.resolve(inputPath);
+    const workspaceRoot = path.resolve(process.cwd());
+    const originalRoot = path.resolve(currentDirname);
+    if (resolved.startsWith(workspaceRoot) || resolved.startsWith(originalRoot)) {
+      return resolved;
+    }
+    return null;
+  }
+
   // Helper: Recursive directory scanner
   function scanDirectory(dir: string, baseDir: string = dir): Array<{ name: string; path: string; size: number; relativePath: string }> {
     let results: Array<{ name: string; path: string; size: number; relativePath: string }> = [];
@@ -147,13 +159,14 @@ async function startServer() {
       targetPath = path.resolve(directoryPath);
     }
 
-    if (!fs.existsSync(targetPath)) {
-      return res.status(404).json({ error: `Directory not found: ${directoryPath}` });
+    const safeTarget = getSafePath(targetPath);
+    if (!safeTarget || !fs.existsSync(safeTarget)) {
+      return res.status(404).json({ error: `Directory not found or access denied: ${directoryPath}` });
     }
 
-    const files = scanDirectory(targetPath);
+    const files = scanDirectory(safeTarget);
     res.json({
-      scannedPath: targetPath,
+      scannedPath: safeTarget,
       totalCount: files.length,
       files: files
     });
@@ -182,7 +195,7 @@ async function startServer() {
 
     const cleanedPath = (filePath.startsWith("local-file://") || filePath.startsWith("blob:")) 
       ? filePath 
-      : path.resolve(filePath);
+      : (getSafePath(filePath) || path.resolve(filePath));
     
     const fileName = (filePath.startsWith("local-file://") || filePath.startsWith("blob:"))
       ? path.basename(filePath.replace("local-file://", ""))
@@ -367,13 +380,13 @@ async function startServer() {
       return res.status(400).json({ error: "Missing filePath URL query parameter" });
     }
 
-    const resolvedFilePath = path.resolve(filePath);
-    if (!fs.existsSync(resolvedFilePath)) {
+    const safePath = getSafePath(filePath);
+    if (!safePath || !fs.existsSync(safePath)) {
       return res.json({ exists: false, content: "" });
     }
 
     try {
-      const content = fs.readFileSync(resolvedFilePath, "utf-8").trim();
+      const content = fs.readFileSync(safePath, "utf-8").trim();
       return res.json({ exists: true, content });
     } catch (err) {
       return res.status(500).json({ error: "Failed to read result file" });
@@ -386,16 +399,16 @@ async function startServer() {
     if (!filePath || typeof filePath !== "string") {
       return res.status(400).json({ error: "Missing filePath parameter" });
     }
-    const resolvedFilePath = path.resolve(filePath);
-    if (fs.existsSync(resolvedFilePath)) {
+    const safePath = getSafePath(filePath);
+    if (safePath && fs.existsSync(safePath)) {
       try {
-        fs.writeFileSync(resolvedFilePath, "", "utf-8");
+        fs.writeFileSync(safePath, "", "utf-8");
         return res.json({ success: true });
       } catch (err) {
         return res.status(500).json({ error: "Failed to clear result file" });
       }
     }
-    res.json({ success: false, message: "File not found" });
+    res.json({ success: false, message: "File not found or access denied" });
   });
 
   // --- API ROUTE: Stream Local Audio ---
@@ -405,16 +418,16 @@ async function startServer() {
       return res.status(400).send("Parameter 'filePath' is required");
     }
 
-    const cleanedPath = path.resolve(filePath);
-    if (!fs.existsSync(cleanedPath)) {
-      return res.status(404).send(`Audio file not found: ${filePath}`);
+    const safePath = getSafePath(filePath);
+    if (!safePath || !fs.existsSync(safePath)) {
+      return res.status(404).send(`Audio file not found or access denied: ${filePath}`);
     }
 
-    const stats = fs.statSync(cleanedPath);
+    const stats = fs.statSync(safePath);
     const range = req.headers.range;
 
     // Standard HTTP audio content headers
-    const ext = path.extname(cleanedPath).toLowerCase();
+    const ext = path.extname(safePath).toLowerCase();
     let contentType = "audio/mpeg";
     if (ext === ".wav") contentType = "audio/wav";
     if (ext === ".ogg") contentType = "audio/ogg";
@@ -427,7 +440,7 @@ async function startServer() {
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
       const chunksize = (end - start) + 1;
-      const file = fs.createReadStream(cleanedPath, { start, end });
+      const file = fs.createReadStream(safePath, { start, end });
       const head = {
         "Content-Range": `bytes ${start}-${end}/${stats.size}`,
         "Accept-Ranges": "bytes",
@@ -442,7 +455,7 @@ async function startServer() {
         "Content-Type": contentType,
       };
       res.writeHead(200, head);
-      fs.createReadStream(cleanedPath).pipe(res);
+      fs.createReadStream(safePath).pipe(res);
     }
   });
 

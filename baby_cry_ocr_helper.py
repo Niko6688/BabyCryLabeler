@@ -508,6 +508,40 @@ def perform_fast_ocr(reader, image_path, max_dim=1600):
     print(f"   ⚡ [极速OCR优化] 原始分辨率 {orig_w}x{orig_h} ➔ 缩放至 {img_input.shape[1]}x{img_input.shape[0]}，OCR耗时: {dt:.2f}秒 (提速约 5-10 倍)")
     return mapped_results
 
+def extract_time_from_string(text):
+    if not text:
+        return None
+        
+    # 1. 强力清洗并剃除日期前缀扩展，兼容 4位/2位 年份、中英文及各种分隔符。比如：
+    # "2026-06-2119.47.48" -> " 19.47.48"
+    # "26-06-21 18:44:08" -> " 18:44:08"
+    # "2026.06.21 18:44" -> " 18:44"
+    cleaned = re.sub(r'\b(?:20)?\d{2}\s*[-\./年]\s*\d{1,2}\s*[-\./月]\s*\d{1,2}(?:\s*日)?\s*', ' ', text)
+    cleaned = cleaned.strip()
+
+    # 模式 A (冒号) - 19:47:48 或者 19:47 或 19：47
+    m1 = re.search(r'\b([0-2]?\d)\s*[:：]\s*([0-5]\d)\b', cleaned)
+    if m1:
+        h, m = int(m1.group(1)), int(m1.group(2))
+        if h <= 23 and m <= 59:
+            return h, m
+
+    # 模式 B (点/句号 - EasyOCR 极度高发误判) - 19.47.48 或者 19.47
+    m2 = re.search(r'\b([0-2]?\d)\s*(?:\.|[。])\s*([0-5]\d)\b', cleaned)
+    if m2:
+        h, m = int(m2.group(1)), int(m2.group(2))
+        if h <= 23 and m <= 59:
+            return h, m
+
+    # 模式 C (空格) - 19 47 48 或者是 19 47
+    m3 = re.search(r'\b([0-2]?\d)\s+([0-5]\d)\b', cleaned)
+    if m3:
+        h, m = int(m3.group(1)), int(m3.group(2))
+        if h <= 23 and m <= 59:
+            return h, m
+
+    return None
+
 def extract_timeline_alarms(lines, ocr_res=None):
     """
     解析整个屏幕的OCR数据，输出：[{'time_minutes': 999, 'time_str': '16:39', 'label': '饥饿', 'y': 1420}]
@@ -604,11 +638,10 @@ def extract_timeline_alarms(lines, ocr_res=None):
     phone_status_time_min = None
     for item in raw_items:
         if item['cy'] < 180:
-            m = re.search(r'\b([0-2]?\d)\s*[:：]\s*([0-5]\d)\b', item['text'])
-            if m:
+            parsed_time = extract_time_from_string(item['text'])
+            if parsed_time:
                 try:
-                    ph = int(m.group(1))
-                    pm = int(m.group(2))
+                    ph, pm = parsed_time
                     pmin = ph * 60 + pm
                     
                     # 强力时针对齐安全清洗验证：手机与运行脚本的电脑几乎必然在同一时区（大体对齐，绝对误差通常极小）
@@ -634,14 +667,10 @@ def extract_timeline_alarms(lines, ocr_res=None):
         if item['cy'] < 110:  # 忽略最顶部系统栏
             continue
             
-        # 强力过滤常见的系统日期抬头
-        cleaned_text = re.sub(r'[12]\d{3}\s*[-\./年]\s*\d{1,2}\s*[-\./月]\s*\d{1,2}\s*(?:日)?', ' ', item['text'])
-        
-        match = TIMESTAMP_RE.search(cleaned_text)
-        if match:
+        parsed_time = extract_time_from_string(item['text'])
+        if parsed_time:
             try:
-                h = int(match.group(1))
-                m = int(match.group(2))
+                h, m = parsed_time
                 
                 # 智能识别“下午/PM”并自动转化为24小时制，确保时间指针对齐无一偏差
                 text_upper = item['text'].upper()
@@ -763,6 +792,8 @@ class LocalHelperState:
         self.status = "disconnected" # disconnected, connected
         self.last_sync_time = 0
         self.track_start_system_minutes = None
+        self.track_start_physics_time = 0  # 轨道刚开始播放的物理物理学时刻（避让前几秒残留）
+        self.consumed_alarms = []          # 已经消费并投递成功的警报缓存对：格式为 [(time_str, label)]，只维护最近 5 个
 
 helper_state = LocalHelperState()
 
@@ -801,12 +832,14 @@ class LocalHelperHTTPHandler(BaseHTTPRequestHandler):
                         helper_state.current_file_name = new_name
                         t_now = time.localtime()
                         helper_state.track_start_system_minutes = t_now.tm_hour * 60 + t_now.tm_min
+                        helper_state.track_start_physics_time = time.time()
                         print(f"\n📲 [双向直连同步] 网页切换音轨 ➔ {new_name or '空队列'}")
                         
                     is_playing_now = data.get("isPlaying", False)
                     if is_playing_now and not helper_state.is_playing:
                         t_now = time.localtime()
                         helper_state.track_start_system_minutes = t_now.tm_hour * 60 + t_now.tm_min
+                        helper_state.track_start_physics_time = time.time()
 
                     helper_state.is_playing = is_playing_now
                     helper_state.is_waiting_interval = data.get("isWaitingInterval", False)
@@ -923,8 +956,16 @@ def main():
                     time.sleep(1.5)
                     continue
 
+                # 🛑 【防级联误判 A】开播放静默冷却期：新音轨播放的前 7 秒为静默缓冲期，不扫描、不识别
+                with helper_state.lock:
+                    play_age = now_time - helper_state.track_start_physics_time
+                if play_age < 7.0:
+                    print(f"\r⏳ [新歌静默期避让] ➔ 音轨刚刚播放 {play_age:.1f} 秒，避开极早期上一首警报残留噪声，{int(7.0 - play_age + 1)}秒后开启扫描...", end="", flush=True)
+                    time.sleep(1.0)
+                    continue
+
                 if detected_label:
-                    state_desc = "正在播放中" if is_playing else "播放已结束(静待网页切曲)"
+                    state_desc = "正在播放中" if is_playing else "播放已结束(静静等待网页切曲)"
                     print(f"\r🌟 [智能直连-已配对] ({state_desc}) 锁定分类标签: 【{detected_label}】...", end="", flush=True)
                     time.sleep(1.5)
                     continue
@@ -1000,14 +1041,32 @@ def main():
                         target_time_alarms.append(alarm)
 
                 active_label = None
+                active_alarm_identity = None # 记录被选中的警报唯一的标签和时间对：(time_str, label)
                 if target_time_alarms:
-                    labels_found = [a['label'] for a in target_time_alarms if a['label'] is not None]
-                    if labels_found:
-                        active_label = labels_found[0]
+                    with helper_state.lock:
+                        consumed = list(helper_state.consumed_alarms)
+                        
+                    # 过滤掉已经被消费和上传过的报警（防止多首连号歌曲重复消费同一条残留屏幕的警报记录）
+                    valid_match_alarms = []
+                    for a in target_time_alarms:
+                        if a['label'] is not None:
+                            identity = (a['time_str'], a['label'])
+                            if identity in consumed:
+                                print(f"   ⚠️ [防残留排重] 发现处于范围内的警报 {a['time_str']} ➔ 【{a['label']}】已被上一首歌配对消费过，已拉黑过滤以防御连锁多米诺误标。")
+                                continue
+                            valid_match_alarms.append(a)
+                     
+                    if valid_match_alarms:
+                        active_label = valid_match_alarms[0]['label']
+                        active_alarm_identity = (valid_match_alarms[0]['time_str'], valid_match_alarms[0]['label'])
 
                 if active_label:
                     with helper_state.lock:
                         helper_state.detected_label = active_label
+                        if active_alarm_identity:
+                            helper_state.consumed_alarms.append(active_alarm_identity)
+                            if len(helper_state.consumed_alarms) > 5:
+                                helper_state.consumed_alarms.pop(0) # 保持队列大小为 5
                     print(f"   🌟 【高精直连匹配成功！】 识别解析到最新警报 ➔ 【{active_label}】")
                     # 同时做剪贴板备份以达成终极冗余
                     copy_to_clipboard(active_label)
@@ -1079,6 +1138,8 @@ def main():
                 track_start_system_minutes = now_comp_min
                 last_track_file = curr_path
                 current_track_label = None
+                with helper_state.lock:
+                    helper_state.track_start_physics_time = time.time()
 
             # 当同一轨道已经中途配对完毕后，进入节能、免截图静音状态
             if current_track_label:
@@ -1091,6 +1152,14 @@ def main():
 
             # 开始实时截图/OCR扫描检测逻辑：支持音频刚播放(is_playing)即开始，也在播放中及播放后保持侦测
             if is_playing or is_waiting or fallback_mode:
+                # 🛑 【防级联误判 B】开播放静默冷却期：新音轨播放的前 7 秒为静默缓冲期，不扫描、不识别
+                with helper_state.lock:
+                    play_age = time.time() - helper_state.track_start_physics_time
+                if not fallback_mode and play_age < 7.0:
+                    print(f"\r⏳ [新歌静默期避让] ➔ 音轨刚刚播放 {play_age:.1f} 秒，避开极早期上一首警报残留噪声，{int(7.0 - play_age + 1)}秒后开启扫描...", end="", flush=True)
+                    time.sleep(1.0)
+                    continue
+
                 state_prefix = "🔊 [音频播放中-实时监测]" if is_playing else "⏳ [音频播放结束-超时截补]"
                 if fallback_mode:
                     print(f"\r📋 [剪贴板物理信道轮询运行中] 🔍 正在每隔 4.5 秒扫描系统屏幕以对齐标注...", end="", flush=True)
@@ -1118,10 +1187,12 @@ def main():
                 alarms, phone_clock_min = extract_timeline_alarms(lines, ocr_res=ocr_res)
                 
                 active_label = None
+                active_alarm_identity = None # 记录被选中的警报唯一的标签和时间对：(time_str, label)
                 if fallback_mode:
                     valid_alarms = [a for a in alarms if a.get('label') is not None]
                     if valid_alarms:
                         active_label = valid_alarms[0]['label']
+                        active_alarm_identity = (valid_alarms[0]['time_str'], valid_alarms[0]['label'])
                 else:
                     time_drift = 0
                     if phone_clock_min is not None:
@@ -1158,14 +1229,33 @@ def main():
                             target_time_alarms.append(alarm)
 
                     if target_time_alarms:
-                        labels_found = [a['label'] for a in target_time_alarms if a['label'] is not None]
-                        if labels_found:
-                            active_label = labels_found[0]
+                        with helper_state.lock:
+                            consumed = list(helper_state.consumed_alarms)
+                            
+                        # 过滤掉已经被消费和上传过的报警（防止多首连号歌曲重复消费同一条残留屏幕的警报记录）
+                        valid_match_alarms = []
+                        for a in target_time_alarms:
+                            if a['label'] is not None:
+                                identity = (a['time_str'], a['label'])
+                                if identity in consumed:
+                                    print(f"   ⚠️ [防残留排重] 发现处于范围内的警报 {a['time_str']} ➔ 【{a['label']}】已被上一首歌配对消费过，已拉黑过滤以防御连锁多米诺误标。")
+                                    continue
+                                valid_match_alarms.append(a)
+                         
+                        if valid_match_alarms:
+                            active_label = valid_match_alarms[0]['label']
+                            active_alarm_identity = (valid_match_alarms[0]['time_str'], valid_match_alarms[0]['label'])
 
                 if active_label:
                     current_track_label = active_label
                     print(f"\n   🌟 【匹配成功！】 识别解析到最新推送标签 ➔ 【{current_track_label}】")
                     
+                    with helper_state.lock:
+                        if active_alarm_identity:
+                            helper_state.consumed_alarms.append(active_alarm_identity)
+                            if len(helper_state.consumed_alarms) > 5:
+                                helper_state.consumed_alarms.pop(0) # 保持队列大小为 5
+
                     # 双重传输保障
                     did_copy = copy_to_clipboard(current_track_label)
                     if did_copy:
