@@ -15,7 +15,7 @@ interface StatisticsDashboardProps {
 export default function StatisticsDashboard({ files, progress }: StatisticsDashboardProps) {
   // 1. Calculate General Metrics
   const totalCount = files.length;
-  const labeledCount = files.filter(f => progress[f.path] !== undefined).length;
+  const labeledCount = files.filter(f => progress[f.path]?.label !== undefined && progress[f.path]?.label !== "").length;
   const unlabeledCount = Math.max(0, totalCount - labeledCount);
   const completionRate = totalCount > 0 ? (labeledCount / totalCount) * 100 : 0;
 

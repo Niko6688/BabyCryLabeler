@@ -25,9 +25,14 @@ const currentDirname = typeof __dirname !== "undefined"
   ? __dirname
   : path.dirname(currentFilename);
 
+const UPLOADED_PREFIX = "[uploaded]";
+
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = 3000;
+
+  // Rate-limiting/deduplication map for playCount incrementing
+  const lastPlayIncrementTimes: Record<string, number> = {};
 
   // Middleware for parsing JSON and URL encoded bodies
   app.use(express.json());
@@ -54,10 +59,20 @@ async function startServer() {
     try {
       const files = fs.readdirSync(dir);
       for (const file of files) {
+        // Skip hidden files/directories (e.g. .git, ._apple_double, .DS_Store, etc.)
+        if (file.startsWith(".")) {
+          continue;
+        }
+
         const fullPath = path.join(dir, file);
         try {
           const stat = fs.statSync(fullPath);
           if (stat.isDirectory()) {
+            const dirName = file.toLowerCase();
+            const excludedDirs = ["node_modules", "dist", "build", "out", ".next", "venv", ".venv", "env", "__pycache__", "__macosx"];
+            if (excludedDirs.includes(dirName)) {
+              continue;
+            }
             results = results.concat(scanDirectory(fullPath, baseDir));
           } else {
             const ext = path.extname(file).toLowerCase();
@@ -186,26 +201,249 @@ async function startServer() {
     return res.json({});
   });
 
+  const escapeCsv = (str: string) => {
+    if (str === null || str === undefined) return "";
+    const s = String(str);
+    if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
+  const rebuildResultFiles = (progressData: Record<string, any>) => {
+    const csvPath = path.join(process.cwd(), "labeled_output.csv");
+    const jsonPath = path.join(process.cwd(), "labeled_output.json");
+
+    const rows = Object.values(progressData)
+      .filter(item => item && item.name && item.name.trim() !== "")
+      .map(item => {
+        return {
+          name: item.name || "",
+          rel: item.rel || "",
+          absolutePath: item.absolutePath || "",
+          tags: item.tags || item.label || "",
+          playCount: typeof item.playCount === 'number' ? item.playCount : 0,
+          lastPlayedAt: item.lastPlayedAt || ""
+        };
+      });
+
+    const headers = "name,rel,absolutePath,tags,playCount,lastPlayedAt";
+    const body = rows.map(r => {
+      return [
+        escapeCsv(r.name),
+        escapeCsv(r.rel),
+        escapeCsv(r.absolutePath),
+        escapeCsv(r.tags),
+        r.playCount,
+        escapeCsv(r.lastPlayedAt)
+      ].join(",");
+    }).join("\n");
+
+    fs.writeFileSync(csvPath, "\uFEFF" + headers + "\n" + body + "\n", "utf-8");
+
+    // Calculate root folder dynamically across 3 environments:
+    // 1. Path scanning mode: Extract root via absolutePath.slice(0, -rel.length)
+    // 2. Electron drag-and-drop: Extract root via finding the longest common parent directory
+    // 3. Web browser drag-and-drop: root = ""
+    let root = "";
+    const realRows = rows.filter(r => 
+      r.absolutePath && 
+      !r.absolutePath.startsWith("[uploaded]") &&
+      !r.absolutePath.startsWith("uploaded_") && 
+      !r.absolutePath.startsWith("local-file:") && 
+      !r.absolutePath.startsWith("blob:")
+    );
+
+    if (realRows.length > 0) {
+      const candidateRoots = realRows.map(r => {
+        const abs = r.absolutePath;
+        const rel = r.rel;
+        if (rel && abs.endsWith(rel)) {
+          let cand = abs.slice(0, abs.length - rel.length);
+          if (cand.endsWith("/") && cand.length > 1) cand = cand.slice(0, -1);
+          if (cand.endsWith("\\") && cand.length > 1) cand = cand.slice(0, -1);
+          return cand;
+        } else {
+          // Fallback: directory name of absolutePath
+          const lastSlash = Math.max(abs.lastIndexOf("/"), abs.lastIndexOf("\\"));
+          if (lastSlash > 0) {
+            return abs.slice(0, lastSlash);
+          }
+          return abs;
+        }
+      });
+
+      // Find the robust longest common parent directory path segments
+      if (candidateRoots.length > 0) {
+        const splitPaths = candidateRoots.map(p => p.split(/[/\\]/));
+        let commonSegments: string[] = [];
+        const firstPathParts = splitPaths[0];
+        
+        for (let i = 0; i < firstPathParts.length; i++) {
+          const segment = firstPathParts[i];
+          const allMatch = splitPaths.every(parts => parts[i] === segment);
+          if (allMatch) {
+            commonSegments.push(segment);
+          } else {
+            break;
+          }
+        }
+        
+        const isAbsoluteUnix = candidateRoots[0].startsWith("/");
+        let result = commonSegments.join(candidateRoots[0].includes("\\") ? "\\" : "/");
+        if (isAbsoluteUnix && !result.startsWith("/")) {
+          result = "/" + result;
+        }
+        root = result;
+      }
+    }
+
+    if (root.includes("[uploaded]") || root.includes("uploaded_") || root.includes("local-file:") || root.includes("blob:")) {
+      root = "";
+    }
+
+    // Map tags to string arrays in JSON
+    const jsonItems = rows.map(r => {
+      let tagsArray: string[] = [];
+      if (r.tags) {
+        if (Array.isArray(r.tags)) {
+          tagsArray = r.tags.map((t: any) => String(t).trim()).filter(Boolean);
+        } else {
+          tagsArray = String(r.tags)
+            .split(",")
+            .map(t => t.trim())
+            .filter(Boolean);
+        }
+      }
+      return {
+        name: r.name,
+        rel: r.rel,
+        absolutePath: r.absolutePath,
+        tags: tagsArray,
+        playCount: r.playCount,
+        lastPlayedAt: r.lastPlayedAt
+      };
+    });
+
+    const jsonOutput = {
+      exportedAt: new Date().toISOString(),
+      root: root,
+      count: jsonItems.length,
+      items: jsonItems
+    };
+
+    fs.writeFileSync(jsonPath, JSON.stringify(jsonOutput, null, 2), "utf-8");
+  };
+
+  const getUnifiedKey = (filePath: string, fileName?: string): string => {
+    if (!filePath) return "";
+    if (filePath.startsWith("local-file://") || filePath.startsWith("blob:")) {
+      const name = fileName || path.basename(filePath.replace("local-file://", ""));
+      return `${UPLOADED_PREFIX}${name}`;
+    }
+    const cleanedPath = getSafePath(filePath) || path.resolve(filePath);
+    return cleanedPath;
+  };
+
+  const recordTrackPlayback = (filePath: string, fileName?: string, relativePath?: string, clientAbsolutePath?: string): Record<string, any> => {
+    const key = getUnifiedKey(filePath, fileName);
+    
+    const cleanedPath = (filePath.startsWith("local-file://") || filePath.startsWith("blob:")) 
+      ? filePath 
+      : (getSafePath(filePath) || path.resolve(filePath));
+
+    const name = fileName || path.basename(cleanedPath);
+    const rel = relativePath || name;
+
+    let absolutePathVal = cleanedPath;
+    if (cleanedPath.startsWith("local-file://") || cleanedPath.startsWith("blob:")) {
+      if (clientAbsolutePath && !clientAbsolutePath.startsWith("local-file:") && !clientAbsolutePath.startsWith("blob:")) {
+        absolutePathVal = clientAbsolutePath;
+      } else {
+        absolutePathVal = `${UPLOADED_PREFIX}${name}`;
+      }
+    }
+
+    const progressPath = path.join(process.cwd(), "progress.json");
+    let progressData: Record<string, any> = {};
+    if (fs.existsSync(progressPath)) {
+      try {
+        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    const currentEntry = progressData[key] || {};
+    
+    // 5-second rate-limiting window per track to prevent double counting
+    const now = Date.now();
+    const lastIncrement = lastPlayIncrementTimes[key] || 0;
+    const timeDiff = now - lastIncrement;
+    
+    let playCount = currentEntry.playCount || 0;
+    let lastPlayedAt = currentEntry.lastPlayedAt || "";
+
+    console.log(`[Playback Record] key: ${key}, now: ${now}, lastIncrement: ${lastIncrement}, diff: ${timeDiff}ms`);
+
+    if (timeDiff > 5000) {
+      lastPlayIncrementTimes[key] = now;
+      playCount += 1;
+      lastPlayedAt = new Date().toISOString();
+      console.log(`[Playback Record] INCREMENTING playCount to ${playCount} for key ${key}`);
+    } else {
+      console.log(`[Playback Record] RATE-LIMITED! Keeping playCount at ${playCount} for key ${key}`);
+    }
+
+    progressData[key] = {
+      ...currentEntry,
+      label: currentEntry.label || "",
+      time: currentEntry.time || "",
+      name: name,
+      rel: currentEntry.rel || rel,
+      absolutePath: absolutePathVal,
+      tags: currentEntry.tags || currentEntry.label || "",
+      playCount: playCount,
+      lastPlayedAt: lastPlayedAt
+    };
+
+    fs.writeFileSync(progressPath, JSON.stringify(progressData, null, 2), "utf-8");
+    rebuildResultFiles(progressData);
+
+    return progressData;
+  };
+
   // --- API ROUTE: Save Label / Update CSV and progress.json ---
   app.post("/api/save-label", (req, res) => {
-    const { filePath, label, labelTime } = req.body;
+    const { filePath, label, labelTime, fileName, relativePath, absolutePath } = req.body;
     if (!filePath || !label) {
       return res.status(400).json({ error: "Missing filePath or label" });
     }
 
+    const key = getUnifiedKey(filePath, fileName);
+    console.log('save-label key:', key);
+    
     const cleanedPath = (filePath.startsWith("local-file://") || filePath.startsWith("blob:")) 
       ? filePath 
       : (getSafePath(filePath) || path.resolve(filePath));
     
-    const fileName = (filePath.startsWith("local-file://") || filePath.startsWith("blob:"))
-      ? path.basename(filePath.replace("local-file://", ""))
-      : path.basename(cleanedPath);
+    const name = fileName || path.basename(cleanedPath);
+    const rel = relativePath || name;
+
+    let absolutePathVal = cleanedPath;
+    if (cleanedPath.startsWith("local-file://") || cleanedPath.startsWith("blob:")) {
+      if (absolutePath && !absolutePath.startsWith("local-file:") && !absolutePath.startsWith("blob:")) {
+        absolutePathVal = absolutePath;
+      } else {
+        absolutePathVal = `${UPLOADED_PREFIX}${name}`;
+      }
+    }
 
     const timeString = labelTime || new Date().toISOString().replace("T", " ").substring(0, 19);
 
     // 1. Update progress.json
     const progressPath = path.join(process.cwd(), "progress.json");
-    let progressData: Record<string, { label: string; time: string }> = {};
+    let progressData: Record<string, any> = {};
     if (fs.existsSync(progressPath)) {
       try {
         progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
@@ -213,84 +451,53 @@ async function startServer() {
         // ignore and overwrite on error
       }
     }
-    progressData[cleanedPath] = { label, time: timeString };
+
+    const currentEntry = progressData[key] || {};
+    
+    // MERGE logic: preserve existing playCount and lastPlayedAt
+    progressData[key] = {
+      ...currentEntry,
+      label: label,
+      time: timeString,
+      name: name,
+      rel: rel,
+      absolutePath: absolutePathVal,
+      tags: label,
+      playCount: typeof currentEntry.playCount === 'number' ? currentEntry.playCount : 0,
+      lastPlayedAt: currentEntry.lastPlayedAt || ""
+    };
+    
     fs.writeFileSync(progressPath, JSON.stringify(progressData, null, 2), "utf-8");
 
-    // 2. Update labeled_output.csv
-    const csvPath = path.join(process.cwd(), "labeled_output.csv");
-    let csvRows: Array<{ fileName: string; alarmMessage: string; label: string; time: string; path: string }> = [];
+    // 2. Rebuild CSV and JSON outputs
+    rebuildResultFiles(progressData);
 
-    if (fs.existsSync(csvPath)) {
-      try {
-        let content = fs.readFileSync(csvPath, "utf-8");
-        // Remove UTF-8 BOM if present during parsing
-        if (content.startsWith("\uFEFF")) {
-          content = content.substring(1);
-        }
-        const lines = content.split("\n").filter(line => line.trim() !== "");
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i];
-          const parts = line.split(",");
-          if (parts.length >= 4) {
-            // Check if it's the old 4-column CSV format or the new 5-column format
-            if (parts.length === 4) {
-              const fileNm = parts[0];
-              const lbl = parts[1];
-              const t = parts[2];
-              const p = parts.slice(3).join(",");
-              csvRows.push({
-                fileName: fileNm,
-                alarmMessage: `宝宝哭了 ${lbl}`,
-                label: lbl,
-                time: t,
-                path: p
-              });
-            } else {
-              const fileNm = parts[0];
-              const msg = parts[1];
-              const lbl = parts[2];
-              const t = parts[3];
-              const p = parts.slice(4).join(",");
-              csvRows.push({
-                fileName: fileNm,
-                alarmMessage: msg,
-                label: lbl,
-                time: t,
-                path: p
-              });
-            }
-          }
-        }
-      } catch (err) {
-        // ignore and rewrite if file is corrupted
-      }
+    res.json({ success: true, progress: progressData });
+  });
+
+  // --- API ROUTE: Record Playback Completion ---
+  app.post("/api/record-play", (req, res) => {
+    const { filePath, fileName, relativePath, absolutePath } = req.body;
+    if (!filePath) {
+      return res.status(400).json({ error: "Missing filePath" });
     }
-
-    // Replace or append row
-    const alarmMessage = `宝宝哭了 ${label}`;
-    const existingIndex = csvRows.findIndex(r => r.path === cleanedPath);
-    const row = { fileName, alarmMessage, label, time: timeString, path: cleanedPath };
-    if (existingIndex !== -1) {
-      csvRows[existingIndex] = row;
-    } else {
-      csvRows.push(row);
-    }
-
-    // Build fresh clean CSV with enhanced columns matching the exact app notifications
-    // Note: We prepend the UTF-8 BOM (\uFEFF) to make it load Chinese flawlessly in Microsoft Excel on Windows
-    const headers = "\uFEFF文件名,报警消息,标签,标注时间,文件路径";
-    const body = csvRows.map(r => `${r.fileName},${r.alarmMessage},${r.label},${r.time},${r.path}`).join("\n");
-    fs.writeFileSync(csvPath, headers + "\n" + body + "\n", "utf-8");
-
-    // Also write labeled_output.json for dual-format export
-    const jsonPath = path.join(process.cwd(), "labeled_output.json");
-    fs.writeFileSync(jsonPath, JSON.stringify(csvRows, null, 2), "utf-8");
-
+    const progressData = recordTrackPlayback(filePath, fileName, relativePath, absolutePath);
     res.json({ success: true, progress: progressData });
   });
 
   // --- API ROUTE: Get Raw CSV Content ---
   app.get("/api/download-csv", (req, res) => {
+    const progressPath = path.join(process.cwd(), "progress.json");
+    let progressData: Record<string, any> = {};
+    if (fs.existsSync(progressPath)) {
+      try {
+        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+      } catch (err) {
+        // ignore
+      }
+    }
+    rebuildResultFiles(progressData);
+
     const csvPath = path.join(process.cwd(), "labeled_output.csv");
     if (!fs.existsSync(csvPath)) {
       return res.status(404).send("labeled_output.csv not found.");
@@ -302,72 +509,21 @@ async function startServer() {
 
   // --- API ROUTE: Get Raw JSON Content ---
   app.get("/api/download-json", (req, res) => {
-    const jsonPath = path.join(process.cwd(), "labeled_output.json");
-    
-    // If labeled_output.json doesn't exist but CSV or progress.json does, dynamically build/repair on the fly!
-    if (!fs.existsSync(jsonPath)) {
-      const csvPath = path.join(process.cwd(), "labeled_output.csv");
-      const progressPath = path.join(process.cwd(), "progress.json");
-      let data: Array<{ fileName: string; alarmMessage: string; label: string; time: string; path: string }> = [];
-
-      if (fs.existsSync(csvPath)) {
-        try {
-          const content = fs.readFileSync(csvPath, "utf-8");
-          const lines = content.split("\n").filter(line => line.trim() !== "");
-          for (let i = 1; i < lines.length; i++) {
-            const parts = lines[i].split(",");
-            if (parts.length >= 4) {
-              if (parts.length === 4) {
-                const fN = parts[0];
-                const lbl = parts[1];
-                const t = parts[2];
-                const p = parts.slice(3).join(",");
-                data.push({
-                  fileName: fN,
-                  alarmMessage: `宝宝哭了 ${lbl}`,
-                  label: lbl,
-                  time: t,
-                  path: p
-                });
-              } else {
-                const fN = parts[0];
-                const msg = parts[1];
-                const lbl = parts[2];
-                const t = parts[3];
-                const p = parts.slice(4).join(",");
-                data.push({
-                  fileName: fN,
-                  alarmMessage: msg,
-                  label: lbl,
-                  time: t,
-                  path: p
-                });
-              }
-            }
-          }
-        } catch (e) {
-          // ignore
-        }
-      } else if (fs.existsSync(progressPath)) {
-        try {
-          const progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
-          data = Object.entries(progressData).map(([filePath, info]: [string, any]) => {
-            const fileName = path.basename(filePath);
-            return {
-              fileName,
-              alarmMessage: `宝宝哭了 ${info.label}`,
-              label: info.label,
-              time: info.time,
-              path: filePath
-            };
-          });
-        } catch (e) {
-          // ignore
-        }
+    const progressPath = path.join(process.cwd(), "progress.json");
+    let progressData: Record<string, any> = {};
+    if (fs.existsSync(progressPath)) {
+      try {
+        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+      } catch (err) {
+        // ignore
       }
-      fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf-8");
     }
+    rebuildResultFiles(progressData);
 
+    const jsonPath = path.join(process.cwd(), "labeled_output.json");
+    if (!fs.existsSync(jsonPath)) {
+      return res.status(404).send("labeled_output.json not found.");
+    }
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Content-Disposition", "attachment; filename=labeled_output.json");
     res.sendFile(jsonPath);
@@ -462,14 +618,60 @@ async function startServer() {
   // --- API ROUTE: Reset / Clear Labeling Files ---
   app.post("/api/reset-all", (req, res) => {
     const csvPath = path.join(process.cwd(), "labeled_output.csv");
-    const progressPath = path.join(process.cwd(), "progress.json");
+    const progressFilePath = path.join(process.cwd(), "progress.json");
     const jsonPath = path.join(process.cwd(), "labeled_output.json");
     try {
-      if (fs.existsSync(csvPath)) fs.unlinkSync(csvPath);
-      if (fs.existsSync(progressPath)) fs.unlinkSync(progressPath);
-      if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
-      res.json({ success: true });
+      // Read current progress before resetting for debugging
+      let progress: Record<string, any> = {};
+      if (fs.existsSync(progressFilePath)) {
+        try {
+          progress = JSON.parse(fs.readFileSync(progressFilePath, "utf-8"));
+        } catch (err) {
+          progress = {};
+        }
+      }
+
+      // 重置前
+      console.log('BEFORE reset:', JSON.stringify(progress));
+
+      // 在重置前先保存 key 列表
+      const beforeKeys = Object.keys(progress);
+
+      // 执行清空
+      Object.keys(progress).forEach(k => delete progress[k]);
+      fs.writeFileSync(progressFilePath, '{}', 'utf-8');
+
+      // 重置后立刻读取文件确认
+      const verify = fs.readFileSync(progressFilePath, 'utf-8');
+      console.log('AFTER reset, file content:', verify);
+      console.log('AFTER reset, memory:', JSON.stringify(progress));
+
+      // Clear the rate-limiting map
+      for (const k of Object.keys(lastPlayIncrementTimes)) {
+        delete lastPlayIncrementTimes[k];
+      }
+
+      // 2. Reset labeled_output.csv to headers only (with UTF-8 BOM)
+      const headers = "\uFEFFname,rel,absolutePath,tags,playCount,lastPlayedAt\n";
+      fs.writeFileSync(csvPath, headers, "utf-8");
+
+      // 3. Reset labeled_output.json to the target empty template
+      const emptyTemplate = {
+        exportedAt: "",
+        root: "",
+        count: 0,
+        items: []
+      };
+      fs.writeFileSync(jsonPath, JSON.stringify(emptyTemplate, null, 2), "utf-8");
+
+      res.json({ 
+        success: true,
+        beforeKeys: beforeKeys,    // 重置前的所有 key
+        afterContent: verify,      // 重置后文件内容
+        afterMemoryKeys: Object.keys(progress)  // 重置后内存的 key
+      });
     } catch (e) {
+      console.error("Failed to clear state files:", e);
       res.status(500).json({ error: "Failed to clear state files" });
     }
   });
@@ -487,9 +689,13 @@ async function startServer() {
 
   app.post("/api/update-playback-status", (req, res) => {
     const { filePath, fileName, isPlaying, isWaitingInterval, waitingSecondsLeft } = req.body;
+    
+    const wasPlaying = playbackStatus.isPlaying;
+    const nowPlaying = !!isPlaying;
+
     playbackStatus.filePath = filePath || null;
     playbackStatus.fileName = fileName || null;
-    playbackStatus.isPlaying = !!isPlaying;
+    playbackStatus.isPlaying = nowPlaying;
     playbackStatus.isWaitingInterval = !!isWaitingInterval;
     playbackStatus.waitingSecondsLeft = waitingSecondsLeft || 0;
     

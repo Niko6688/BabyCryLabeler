@@ -31,7 +31,7 @@ export default function QueueList({
 
   // Compute stats based only on loaded files
   const totalCount = files.length;
-  const labeledCount = files.filter(f => progress[f.path] !== undefined).length;
+  const labeledCount = files.filter(f => progress[f.path]?.label !== undefined && progress[f.path]?.label !== "").length;
   const unlabeledCount = Math.max(0, totalCount - labeledCount);
 
   // Breakdown metrics based only on loaded files
@@ -51,7 +51,7 @@ export default function QueueList({
     if (!matchesSearch) return false;
 
     // 2. Filter selection
-    const isLabeled = progress[f.path] !== undefined;
+    const isLabeled = progress[f.path]?.label !== undefined && progress[f.path]?.label !== "";
     if (filterType === 'unlabeled') return !isLabeled;
     if (filterType === 'labeled') return isLabeled;
     return true;
@@ -245,8 +245,8 @@ export default function QueueList({
             paginatedFiles.map((file, idx) => {
               const absoluteIdx = startIndex + idx;
               const isCurrent = currentFile?.path === file.path;
-              const hasTag = progress[file.path] !== undefined;
               const savedLabel = progress[file.path]?.label;
+              const hasTag = savedLabel !== undefined && savedLabel !== "";
 
               let badgeColor = "bg-indigo-100 text-indigo-700 border-indigo-200";
               if (savedLabel === "饥饿") badgeColor = "bg-red-100 text-red-800 border-red-200";

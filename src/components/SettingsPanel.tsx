@@ -17,7 +17,7 @@ interface SettingsPanelProps {
   isScanning: boolean;
   totalFiles: number;
   unlabeledCount: number;
-  onUploadLocalAudios?: (files: File[]) => void;
+  onUploadLocalAudios?: (files: File[], isDragAndDrop?: boolean) => void;
 }
 
 export default function SettingsPanel({
@@ -40,6 +40,7 @@ export default function SettingsPanel({
   const [isDragOver, setIsDragOver] = useState(false);
   const [isBrowserLoading, setIsBrowserLoading] = useState(false);
   const [browserLoadCount, setBrowserLoadCount] = useState(0);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   // Synchronize when parent updates path (e.g. on demo generation)
   React.useEffect(() => {
@@ -80,7 +81,7 @@ export default function SettingsPanel({
           return ext && supported.includes(ext);
         });
         if (list.length > 0) {
-          onUploadLocalAudios(list);
+          onUploadLocalAudios(list, true);
         }
       }
       return;
@@ -156,7 +157,7 @@ export default function SettingsPanel({
 
       setIsBrowserLoading(false);
       if (filesList.length > 0) {
-        onUploadLocalAudios(filesList);
+        onUploadLocalAudios(filesList, true);
       } else {
         alert("拖入的内容未包含任何支持的音频格式文件 (.mp3, .wav, .m4a, .ogg, .flac, .aac)！");
       }
@@ -185,7 +186,7 @@ export default function SettingsPanel({
           
           setIsBrowserLoading(false);
           if (list.length > 0) {
-            onUploadLocalAudios(list);
+            onUploadLocalAudios(list, false);
           } else {
             alert("没有检测到合规的音频文件 (.mp3, .wav, .m4a, .ogg, .flac, .aac)！");
           }
@@ -431,12 +432,8 @@ export default function SettingsPanel({
         </div>
         <button
           type="button"
-          onClick={() => {
-            if (window.confirm("确定要删除本地标注 CSV 与 progress.json 吗？此操作无法撤销。")) {
-              onResetAll();
-            }
-          }}
-          className="bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-md p-1.5 hover:text-red-700 transition-all shadow-3xs hover:shadow-2xs"
+          onClick={() => setShowResetConfirm(true)}
+          className="bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-md p-1.5 hover:text-red-700 transition-all shadow-3xs hover:shadow-2xs cursor-pointer"
           title="清空标记数据"
         >
           <Trash2 className="w-4 h-4" />
@@ -448,6 +445,38 @@ export default function SettingsPanel({
         <div className="bg-slate-50 border border-slate-200/60 rounded-lg p-3 text-xs flex justify-between items-center text-slate-600 font-medium">
           <span>总共扫描到: <strong className="text-slate-800 font-mono text-sm">{totalFiles}</strong> 首音频</span>
           <span>未标注: <strong className="text-indigo-600 font-mono text-sm">{unlabeledCount}</strong> 首</span>
+        </div>
+      )}
+
+      {/* Custom Reset Confirmation Modal */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-sm mx-4 shadow-xl text-left">
+            <h3 className="font-semibold text-gray-900 mb-2 text-base">确认重置</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              确定要删除本地标注 CSV 与 progress.json 吗？
+              此操作无法撤销。
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                className="px-4 py-2 text-sm text-gray-600 border rounded-md hover:bg-gray-50 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowResetConfirm(false);
+                  onResetAll();
+                }}
+                className="px-4 py-2 text-sm text-white bg-red-600 rounded-md hover:bg-red-700 cursor-pointer"
+              >
+                确认重置
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

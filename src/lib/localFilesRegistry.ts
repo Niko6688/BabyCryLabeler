@@ -15,18 +15,23 @@ let activeObjectUrl: string | null = null;
 /**
  * 批量注册大量本地音频，将其高效缓存在内存 Map 中，返回极轻量的元数据列表，避免任何庞大的 Blob 耗时
  */
-export function registerLocalFiles(files: File[]): AudioFile[] {
+export function registerLocalFiles(files: File[], isDragAndDrop: boolean = false): AudioFile[] {
   const list: AudioFile[] = [];
   const suffix = Date.now();
   files.forEach((file, index) => {
     // 构造极轻量、高度唯一的 path 索引键 (不存储 Blob 字符串，只做映射句柄)
     const key = `local-file://${file.name}-${file.size}-${index}-${suffix}`;
     localFileMap.set(key, file);
+    
+    // 拖拽模式下 rel = name = 文件名
+    const relPath = isDragAndDrop ? file.name : (file.webkitRelativePath || file.name);
+
     list.push({
       name: file.name,
       path: key,
       size: file.size,
-      relativePath: `[在线选择] ${file.name}`
+      relativePath: relPath,
+      absolutePath: (file as any).path || ''
     });
   });
   return list;

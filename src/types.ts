@@ -8,6 +8,7 @@ export interface AudioFile {
   path: string;
   size: number;
   relativePath: string;
+  absolutePath?: string;
 }
 
 export type LabelKey = 'hungry' | 'uncomfortable' | 'sleepy' | 'burp' | 'fussy';
@@ -53,5 +54,11 @@ export interface ProgressData {
   [filePath: string]: {
     label: string;
     time: string;
+    name?: string;
+    rel?: string;
+    absolutePath?: string;
+    tags?: string;
+    playCount?: number;
+    lastPlayedAt?: string;
   };
 }

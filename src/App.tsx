@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Volume2, FileAudio, Check, AlertTriangle, Layers, Trophy, Cpu, LogOut } from 'lucide-react';
 import { AudioFile, ProgressData, LabelMode, PlaybackMode } from './types';
 import SettingsPanel from './components/SettingsPanel';
@@ -13,11 +13,38 @@ import QueueList from './components/QueueList';
 import StatisticsDashboard from './components/StatisticsDashboard';
 import { registerLocalFiles, clearAllLocalFiles } from './lib/localFilesRegistry';
 
+const UPLOADED_PREFIX = '[uploaded]';
+
 export default function App() {
   // Scanned lists
   const [files, setFiles] = useState<AudioFile[]>([]);
-  const [progress, setProgress] = useState<ProgressData>({});
+  const [backendProgress, setBackendProgress] = useState<Record<string, any>>({});
   const [currentFile, setCurrentFile] = useState<AudioFile | null>(null);
+
+  // Dynamically map backend keys (absolute paths or [uploaded]filenames) to frontend keys (like local-file://...)
+  const progress = useMemo(() => {
+    const mapped: ProgressData = {};
+    // First copy all backend keys directly
+    Object.entries(backendProgress).forEach(([key, value]) => {
+      mapped[key] = value as any;
+    });
+
+    // Then, for each current file, if it's a local file, map its file.path to its entry in backendProgress
+    files.forEach(file => {
+      if (file.path.startsWith('local-file://') || file.path.startsWith('blob:')) {
+        const backendKey = `${UPLOADED_PREFIX}${file.name}`;
+        if (backendProgress[backendKey]) {
+          mapped[file.path] = backendProgress[backendKey] as any;
+        }
+      } else {
+        if (backendProgress[file.path]) {
+          mapped[file.path] = backendProgress[file.path] as any;
+        }
+      }
+    });
+
+    return mapped;
+  }, [backendProgress, files]);
 
   // Path configurations
   const [scannedPath, setScannedPath] = useState<string>(() => {
@@ -96,7 +123,8 @@ export default function App() {
             fileName: currentFile?.name || null,
             isPlaying: isPlaying,
             isWaitingInterval: isWaitingInterval,
-            waitingSecondsLeft: waitingSecondsLeft
+            waitingSecondsLeft: waitingSecondsLeft,
+            absolutePath: currentFile?.absolutePath || null
           })
         });
         if (response.ok && active) {
@@ -138,7 +166,7 @@ export default function App() {
       const res = await fetch('/api/progress');
       if (res.ok) {
         const data = await res.json();
-        setProgress(data);
+        setBackendProgress(data);
       }
     } catch (e) {
       console.error("Failed to fetch progress", e);
@@ -163,7 +191,7 @@ export default function App() {
         }
         // If there's a queue loaded, default select the first unlabeled track
         if (data.files.length > 0) {
-          const unlabeled = data.files.find((f: AudioFile) => progress[f.path] === undefined);
+          const unlabeled = data.files.find((f: AudioFile) => !progress[f.path]?.label);
           if (unlabeled) {
             setCurrentFile(unlabeled);
           } else {
@@ -210,8 +238,26 @@ export default function App() {
     try {
       const res = await fetch('/api/reset-all', { method: 'POST' });
       if (res.ok) {
-        setProgress({});
-        alert("标注会话清理完毕！如果您重新生成了 Demo 音频，可直接再次使用。");
+        // 1. Reset all React state variables
+        setBackendProgress({});
+        setFiles([]);
+        setCurrentFile(null);
+        setIsPlaying(false);
+        setIsWaitingInterval(false);
+        setWaitingSecondsLeft(0);
+        
+        // 2. Clear client-side file uploads registry
+        clearAllLocalFiles();
+
+        // 3. Reset paths state to default
+        setScannedPath('./demo_audios');
+        setResultFilePath('./demo_audios/result.txt');
+
+        // 4. Remove items from localStorage
+        localStorage.removeItem('audio_scanned_path');
+        localStorage.removeItem('audio_result_file_path');
+
+        alert("标注会话清理完毕！所有前端状态、音频列表、标注结果与路径缓存均已完全重置。");
       }
     } catch (err) {
       alert("清理重置失败");
@@ -219,9 +265,9 @@ export default function App() {
   };
 
   // Direct client browser upload (WAV/MP3s) for online sandboxed previews
-  const handleUploadLocalAudios = (uploadedFileList: FileList | File[]) => {
+  const handleUploadLocalAudios = (uploadedFileList: FileList | File[], isDragAndDrop: boolean = false) => {
     const fileArray = Array.isArray(uploadedFileList) ? uploadedFileList : Array.from(uploadedFileList);
-    const list = registerLocalFiles(fileArray);
+    const list = registerLocalFiles(fileArray, isDragAndDrop);
     if (list.length > 0) {
       setFiles(prev => [...list, ...prev]);
       setCurrentFile(list[0]);
@@ -242,7 +288,28 @@ export default function App() {
   };
 
   // Triggered when a track has finished playback loops
-  const handleTrackCompletedPlayback = () => {
+  const handleTrackCompletedPlayback = async () => {
+    if (currentFile) {
+      try {
+        const res = await fetch('/api/record-play', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filePath: currentFile.path,
+            fileName: currentFile.name,
+            relativePath: currentFile.relativePath,
+            absolutePath: currentFile.absolutePath || null
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setBackendProgress(data.progress);
+        }
+      } catch (err) {
+        console.error("Failed to record play completion", err);
+      }
+    }
+
     // 延迟间歇：为了完美兼容手机端（图灵看护 App）在播放完音频后由于神经网络分析导致的2-3分钟延迟，
     // 我们将等待计时上限设为 300 秒（5分钟）。一旦 Python 脚本扫描到了分类词，网页会瞬时捕获并跳转下一首，不会有任何不必要的空等！
     const waitTime = 300; 
@@ -273,7 +340,7 @@ export default function App() {
     let nextTrack: AudioFile | null = null;
 
     if (playbackMode === 'random') {
-      const unlabeled = files.filter(f => progress[f.path] === undefined);
+      const unlabeled = files.filter(f => !progress[f.path]?.label);
       if (unlabeled.length > 0) {
         const randIdx = Math.floor(Math.random() * unlabeled.length);
         nextTrack = unlabeled[randIdx];
@@ -291,7 +358,7 @@ export default function App() {
         // Find first unlabeled after currentIndex, or pick from beginning
         let found = false;
         for (let i = currentIndex + 1; i < files.length; i++) {
-          if (progress[files[i].path] === undefined) {
+          if (!progress[files[i].path]?.label) {
             nextTrack = files[i];
             found = true;
             break;
@@ -300,7 +367,7 @@ export default function App() {
         if (!found) {
           // Wrap around to scan list starting from 0 to current
           for (let i = 0; i <= currentIndex; i++) {
-            if (progress[files[i].path] === undefined) {
+            if (!progress[files[i].path]?.label) {
               nextTrack = files[i];
               found = true;
               break;
@@ -336,12 +403,15 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           filePath: currentFile.path,
-          label: labelString
+          label: labelString,
+          fileName: currentFile.name,
+          relativePath: currentFile.relativePath,
+          absolutePath: currentFile.absolutePath || null
         })
       });
       if (res.ok) {
         const data = await res.json();
-        setProgress(data.progress);
+        setBackendProgress(data.progress);
 
         // Terminate waiting sequence immediately upon receiving label, and proceed to next track!
         setIsWaitingInterval(false);
@@ -370,7 +440,7 @@ export default function App() {
 
   // Total metrics count helpers
   const totalFiles = files.length;
-  const loadedLabeledCount = files.filter(f => progress[f.path] !== undefined).length;
+  const loadedLabeledCount = files.filter(f => progress[f.path]?.label !== undefined && progress[f.path]?.label !== "").length;
   const unlabeledCount = Math.max(0, totalFiles - loadedLabeledCount);
 
   return (
