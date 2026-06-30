@@ -30,11 +30,16 @@ const UPLOADED_PREFIX = "[uploaded]";
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  console.log(`[Express] Starting server in NODE_ENV=${process.env.NODE_ENV}`);
 
   // Rate-limiting/deduplication map for playCount incrementing
   const lastPlayIncrementTimes: Record<string, number> = {};
 
   // Middleware for parsing JSON and URL encoded bodies
+  app.use((req, res, next) => {
+    console.log(`[Express] Incoming Request: ${req.method} ${req.url}`);
+    next();
+  });
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
