@@ -37,7 +37,13 @@ async function startServer() {
 
   // Middleware for parsing JSON and URL encoded bodies
   app.use((req, res, next) => {
-    console.log(`[Express] Incoming Request: ${req.method} ${req.url}`);
+    const isFiltered = req.url === '/api/update-playback-status' || 
+                       req.url === '/api/get-playback-status' || 
+                       req.url === '/api/progress' ||
+                       req.url === '/api/scan';
+    if (!isFiltered) {
+      console.log(`[Express] Incoming Request: ${req.method} ${req.url}`);
+    }
     next();
   });
   app.use(express.json());
@@ -331,8 +337,8 @@ async function startServer() {
     });
 
     const jsonOutput = {
-      exportedAt: new Date().toISOString(),
-      root: root,
+      exportedAt: jsonItems.length === 0 ? "" : new Date().toISOString(),
+      root: jsonItems.length === 0 ? "" : root,
       count: jsonItems.length,
       items: jsonItems
     };
@@ -389,15 +395,10 @@ async function startServer() {
     let playCount = currentEntry.playCount || 0;
     let lastPlayedAt = currentEntry.lastPlayedAt || "";
 
-    console.log(`[Playback Record] key: ${key}, now: ${now}, lastIncrement: ${lastIncrement}, diff: ${timeDiff}ms`);
-
     if (timeDiff > 5000) {
       lastPlayIncrementTimes[key] = now;
       playCount += 1;
       lastPlayedAt = new Date().toISOString();
-      console.log(`[Playback Record] INCREMENTING playCount to ${playCount} for key ${key}`);
-    } else {
-      console.log(`[Playback Record] RATE-LIMITED! Keeping playCount at ${playCount} for key ${key}`);
     }
 
     progressData[key] = {
@@ -426,7 +427,6 @@ async function startServer() {
     }
 
     const key = getUnifiedKey(filePath, fileName);
-    console.log('save-label key:', key);
     
     const cleanedPath = (filePath.startsWith("local-file://") || filePath.startsWith("blob:")) 
       ? filePath 
@@ -697,11 +697,23 @@ async function startServer() {
     
     const wasPlaying = playbackStatus.isPlaying;
     const nowPlaying = !!isPlaying;
+    const oldFilePath = playbackStatus.filePath;
+    const newFilePath = filePath || null;
+    const wasWaiting = playbackStatus.isWaitingInterval;
+    const nowWaiting = !!isWaitingInterval;
 
-    playbackStatus.filePath = filePath || null;
+    if (wasPlaying !== nowPlaying || oldFilePath !== newFilePath || wasWaiting !== nowWaiting) {
+      const unifiedKey = newFilePath ? getUnifiedKey(newFilePath, fileName || undefined) : 'none';
+      const displayName = unifiedKey !== 'none' 
+        ? (unifiedKey.startsWith(UPLOADED_PREFIX) ? unifiedKey.replace(UPLOADED_PREFIX, '') : path.basename(unifiedKey)) 
+        : 'none';
+      console.log(`[Playback Status Change] file: ${displayName}, playing: ${nowPlaying}, waiting: ${nowWaiting}`);
+    }
+
+    playbackStatus.filePath = newFilePath;
     playbackStatus.fileName = fileName || null;
     playbackStatus.isPlaying = nowPlaying;
-    playbackStatus.isWaitingInterval = !!isWaitingInterval;
+    playbackStatus.isWaitingInterval = nowWaiting;
     playbackStatus.waitingSecondsLeft = waitingSecondsLeft || 0;
     
     res.json({
@@ -776,6 +788,15 @@ async function startServer() {
       scannedPath: demoDir,
       resultTxtPath: resultTxtPath,
       message: "Generated 5 high-quality synth audio files for immediate demo testing in the AI Studio preview environment!"
+    });
+  });
+
+  // --- FALLBACK 404 FOR ALL OTHER /api ROUTES ---
+  app.all("/api/*", (req, res) => {
+    console.warn(`[Express] 404 API Not Found: ${req.method} ${req.url}`);
+    res.status(404).json({
+      error: `API route not found: ${req.method} ${req.url}`,
+      success: false
     });
   });
 

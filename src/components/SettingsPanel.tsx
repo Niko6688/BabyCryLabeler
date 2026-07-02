@@ -5,8 +5,10 @@
 
 import React, { useState } from 'react';
 import { Folder, Play, RefreshCw, Trash2, FileSpreadsheet, Sparkles, HelpCircle, UploadCloud, Smartphone, FileJson } from 'lucide-react';
+import { Language, getTranslations } from '../lib/i18n';
 
 interface SettingsPanelProps {
+  lang: Language;
   scannedPath: string;
   setScannedPath: (path: string) => void;
   resultFilePath: string;
@@ -18,9 +20,12 @@ interface SettingsPanelProps {
   totalFiles: number;
   unlabeledCount: number;
   onUploadLocalAudios?: (files: File[], isDragAndDrop?: boolean) => void;
+  intervalSeconds: number;
+  setIntervalSeconds: (seconds: number) => void;
 }
 
 export default function SettingsPanel({
+  lang,
   scannedPath,
   setScannedPath,
   resultFilePath,
@@ -31,8 +36,28 @@ export default function SettingsPanel({
   isScanning,
   totalFiles,
   unlabeledCount,
-  onUploadLocalAudios
+  onUploadLocalAudios,
+  intervalSeconds,
+  setIntervalSeconds
  }: SettingsPanelProps) {
+  const t = getTranslations(lang);
+  
+  const formatInterval = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (lang === 'zh') {
+      if (m === 0) return `当前：${seconds} 秒（${s} 秒）`;
+      const minStr = `${m} 分钟`;
+      const secStr = s > 0 ? ` ${s} 秒` : '';
+      return `当前：${seconds} 秒（${minStr}${secStr}）`;
+    } else {
+      if (m === 0) return `Current: ${seconds} seconds (${s} sec)`;
+      const minStr = `${m} min`;
+      const secStr = s > 0 ? ` ${s} sec` : '';
+      return `Current: ${seconds} seconds (${minStr}${secStr})`;
+    }
+  };
+
   const [localPath, setLocalPath] = useState(scannedPath || './demo_audios');
   const [localResultPath, setLocalResultPath] = useState(resultFilePath || './demo_audios/result.txt');
   const [showHelp, setShowHelp] = useState(true); // Default show help to guide user
@@ -118,6 +143,22 @@ export default function SettingsPanel({
                 const ext = file.name.split('.').pop()?.toLowerCase();
                 const supported = ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac'];
                 if (ext && supported.includes(ext)) {
+                  let relPath = entry.fullPath || '';
+                  if (relPath.startsWith('/')) {
+                    relPath = relPath.slice(1);
+                  }
+                  try {
+                    Object.defineProperty(file, 'webkitRelativePath', {
+                      value: relPath,
+                      writable: true,
+                      enumerable: true,
+                      configurable: true
+                    });
+                  } catch (e) {
+                    (file as any).webkitRelativePath = relPath;
+                  }
+                  (file as any).relativePath = relPath;
+
                   filesList.push(file);
                   filesFound++;
                   // Batch counter updates dynamically to keep rendering smooth
@@ -210,9 +251,15 @@ export default function SettingsPanel({
             <Folder className="w-5 h-5 text-indigo-600 absolute inset-0 m-auto" />
           </div>
           <div className="text-center space-y-1">
-            <p className="text-sm font-bold text-slate-800">正在智能解析并载入本地音频...</p>
-            <p className="text-xs text-indigo-600 font-mono font-bold">已发现并读取 {browserLoadCount} 个支持的音轨</p>
-            <p className="text-[10px] text-slate-400">正在非阻塞式将源文件导入内存，请勿关闭或刷新此页面</p>
+            <p className="text-sm font-bold text-slate-800">
+              {lang === 'zh' ? '正在智能解析并载入本地音频...' : 'Parsing and loading local audios...'}
+            </p>
+            <p className="text-xs text-indigo-600 font-mono font-bold">
+              {lang === 'zh' ? `已发现并读取 ${browserLoadCount} 个支持的音轨` : `Found and read ${browserLoadCount} supported tracks`}
+            </p>
+            <p className="text-[10px] text-slate-400">
+              {lang === 'zh' ? '正在非阻塞式将源文件导入内存，请勿关闭或刷新此页面' : 'Importing files into memory non-blockingly, do not close or reload.'}
+            </p>
           </div>
         </div>
       )}
@@ -221,14 +268,18 @@ export default function SettingsPanel({
           <div className="p-1.5 bg-slate-100 text-slate-700 rounded-md">
             <Folder className="w-5 h-5" />
           </div>
-          <h2 className="font-semibold text-slate-800 text-md">1. 音频加载(双模式选择)</h2>
+          <h2 className="font-semibold text-slate-800 text-md">
+            {lang === 'zh' ? '1. 音频加载(双模式选择)' : '1. Audio Loading (Dual Mode Selection)'}
+          </h2>
         </div>
         <button
           onClick={() => setShowHelp(!showHelp)}
           className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 transition-colors font-semibold"
         >
           <HelpCircle className="w-4 h-4" />
-          {showHelp ? "收起说明" : "查看说明 / 手机识别"}
+          {showHelp 
+            ? (lang === 'zh' ? '收起说明' : 'Hide Help') 
+            : (lang === 'zh' ? '查看说明 / 手机识别' : 'View Help / Mobile Recognition')}
         </button>
       </div>
 
@@ -237,25 +288,39 @@ export default function SettingsPanel({
           <div>
             <p className="font-bold text-indigo-950 flex items-center gap-1">
               <Smartphone className="w-4 h-4 text-indigo-600" />
-              Q1: 本机或手机屏幕是如何识别的？
+              {lang === 'zh' ? 'Q1: 本机或手机屏幕是如何识别的？' : 'Q1: How is the local screen or mobile screen recognized?'}
             </p>
             <p className="text-indigo-900/95 ml-5 mt-1">
-              <strong>自动识别原理：</strong>手机上的婴儿哭声识别 App 被安放于播音电脑旁。有两种连接模式：
-              <br />• <strong>剪贴板同步：</strong>使用跨端同步工具（如 Web/手机共享剪贴板，或 ADB 输入监听。每次手机 App 识别出诸如 “Feed / 饥饿” 并复制，页面将瞬间捕获并完成当前音频打标，无需人工干预！
-              <br />• <strong>结果文本输出（OCR / API）：</strong>电脑端开启 <code>scrcpy</code> 实时投影手机画面，电脑运行 Python 脚本采用后台 OCR（例如 EasyOCR / Tesseract）持续截屏手机窗口并把辨识到的词流写入本地 <code>result.txt</code>，本端即可触发秒级轮询完成自动打标！
+              <strong>{lang === 'zh' ? '自动识别原理：' : 'Auto Recognition Principle: '}</strong>
+              {lang === 'zh' ? (
+                <>手机上的婴儿哭声识别 App 被安放于播音电脑旁。有两种连接模式：
+                <br />• <strong>剪贴板同步：</strong>使用跨端同步工具（如 Web/手机共享剪贴板，或 ADB 输入监听。每次手机 App 识别出诸如 “Feed / 饥饿” 并复制，页面将瞬间捕获并完成当前音频打标，无需人工干预！
+                <br />• <strong>结果文本输出（OCR / API）：</strong>电脑端开启 <code>scrcpy</code> 实时投影手机画面，电脑运行 Python 脚本采用后台 OCR（例如 EasyOCR / Tesseract）持续截屏手机窗口并把辨识到的词流写入本地 <code>result.txt</code>，本端即可触发秒级轮询完成自动打标！</>
+              ) : (
+                <>Place the baby cry translator App on your smartphone next to the speaker. Connect with:
+                <br />• <strong>Clipboard Sync:</strong> Use cross-device clipboard sync or ADB listener. Whenever the phone app recognizes a state (e.g., "Feed / Hungry") and copies it, this dashboard intercepts it and saves instantly!
+                <br />• <strong>File Log (OCR / API):</strong> Project your screen with <code>scrcpy</code>, run the offline Python OCR helper script, which continuously captures screenshots and writes matching tags to <code>result.txt</code> for instant polling!</>
+              )}
             </p>
           </div>
 
           <div className="border-t border-indigo-100/80 pt-2 text-indigo-900/95">
-            <p className="font-bold text-indigo-950">Q2: 为什么输入框里不能直接选自己的文件夹？</p>
+            <p className="font-bold text-indigo-950">
+              {lang === 'zh' ? 'Q2: 为什么输入框里不能直接选自己的文件夹？' : 'Q2: Why can\'t I pick a physical path directly in the web browser?'}
+            </p>
             <p className="ml-5 mt-1">
-              <strong>沙盒运行机制保障：</strong>您当前在 Google AI Studio 的 **网页云端预览环境**，出于浏览器的安全边界沙箱设计，云端服务器是<strong>无法访问您个人电脑的物理 C盘/D盘 或 macOS 文件夹的</strong>！
-              <br />
-              <strong>两步解决使用限制：</strong>
-              <br />
-              1. <strong>极速云端体验（直接上传）：</strong>请直接在下方切换到 <code>[选择自己的文件直接加载]</code> 标签页，<strong>点选或拖入电脑上的任意音频</strong>即可在网页中直接试听和标注！
-              <br />
-              2. <strong>本地执行（递归扫描目录）：</strong>您可以导出项目代码，在本地终端运行 <code>npm start</code>，打开 <code>http://localhost:3000</code>，Node 就会完美读取任意本机路径了！
+              <strong>{lang === 'zh' ? '沙盒运行机制保障：' : 'Sandbox Protection Security: '}</strong>
+              {lang === 'zh' ? (
+                <>您当前在 Google AI Studio 的 **网页云端预览环境**，出于浏览器的安全边界沙箱设计，云端服务器是<strong>无法访问您个人电脑的物理 C盘/D盘 或 macOS 文件夹的</strong>！
+                <br /><strong>两步解决使用限制：</strong>
+                <br />1. <strong>极速云端体验（直接上传）：</strong>请直接在下方切换到 <code>[选择自己的文件直接加载]</code> 标签页，<strong>点选或拖入电脑上的任意音频</strong>即可在网页中直接试听和标注！
+                <br />2. <strong>本地执行（递归扫描目录）：</strong>您可以导出项目代码，在本地终端运行 <code>npm start</code>，打开 <code>http://localhost:3000</code>，Node 就会完美读取任意本机路径了！</>
+              ) : (
+                <>You are currently in the **web preview sandbox**. Browsers strictly prohibit remote websites from directly accessing physical files on your hard drive (C:\\, D:\\, or macOS folders)!
+                <br /><strong>Two ways to run your files:</strong>
+                <br />1. <strong>Direct Upload (Recommended for Web):</strong> Switch to the <code>🌐 Direct Upload</code> tab below, <strong>click or drag & drop files/folders</strong> to play and label in your browser instantly!
+                <br />2. <strong>Local Deployment:</strong> Export this project as ZIP, run <code>npm start</code> on your local terminal, navigate to <code>http://localhost:3000</code>, and Node.js will read any absolute paths on your machine natively!</>
+              )}
             </p>
           </div>
         </div>
@@ -270,7 +335,7 @@ export default function SettingsPanel({
             activeTab === 'browser' ? 'bg-white text-indigo-900 shadow-xs border-b border-black/5' : 'text-slate-500 hover:text-slate-800'
           }`}
         >
-          🌐 直接选/拖入自己的音频(推荐预览)
+          {lang === 'zh' ? '🌐 直接选/拖入自己的音频(推荐)' : '🌐 Direct Upload / Drop Audios'}
         </button>
         <button
           type="button"
@@ -279,7 +344,7 @@ export default function SettingsPanel({
             activeTab === 'server' ? 'bg-white text-indigo-900 shadow-xs border-b border-black/5' : 'text-slate-500 hover:text-slate-800'
           }`}
         >
-          🖥️ 本地绝对路径扫描(适合本地运行)
+          {lang === 'zh' ? '🖥️ 本地绝对路径扫描' : '🖥️ Absolute Directory Path'}
         </button>
       </div>
 
@@ -287,7 +352,7 @@ export default function SettingsPanel({
       {activeTab === 'browser' && (
         <div className="space-y-3">
           <label className="block text-xs font-semibold text-slate-600">
-            在浏览器中直接载入本机任意文件夹，自动递归统计并识别所有音频文件：
+            {lang === 'zh' ? '在浏览器中直接载入本机任意文件夹，自动递归统计并识别所有音频文件：' : 'Directly load folders or files recursively in the browser:'}
           </label>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -310,8 +375,12 @@ export default function SettingsPanel({
                 className="absolute inset-0 opacity-0 cursor-pointer"
               />
               <UploadCloud className="w-10 h-10 text-slate-400 group-hover:text-indigo-500 transition-colors mb-2" />
-              <p className="text-xs font-bold text-slate-700">点击 或 拖放音频到此</p>
-              <p className="text-[11px] text-slate-400 mt-1">支持把一整个文件夹直接拖进来</p>
+              <p className="text-xs font-bold text-slate-700">
+                {lang === 'zh' ? '点击 或 拖放音频到此' : 'Click or Drag & Drop Audios'}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {lang === 'zh' ? '支持把一整个文件夹直接拖进来' : 'Supports dragging an entire folder'}
+              </p>
             </div>
 
             {/* Folder selection box using webkitdirectory */}
@@ -328,8 +397,12 @@ export default function SettingsPanel({
                 className="absolute inset-0 opacity-0 cursor-pointer"
               />
               <Folder className="w-10 h-10 text-slate-400 group-hover:text-emerald-500 transition-colors mb-2" />
-              <p className="text-xs font-bold text-slate-700 font-sans">点击选择整个音频文件夹</p>
-              <p className="text-[11px] text-slate-400 mt-1">支持本机多级文件夹深度读取</p>
+              <p className="text-xs font-bold text-slate-700 font-sans">
+                {lang === 'zh' ? '点击选择整个音频文件夹' : 'Select Folder via Dialog'}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {lang === 'zh' ? '支持本机多级文件夹深度读取' : 'Recursively inspect deep child-directories'}
+              </p>
             </div>
           </div>
         </div>
@@ -339,7 +412,7 @@ export default function SettingsPanel({
       {activeTab === 'server' && (
         <form onSubmit={handleScanSubmit} className="space-y-2 animate-fadeIn">
           <label className="block text-xs font-semibold text-slate-600">
-            音频文件夹绝对路径 (仅适用于电脑本地终端 <code>npm start</code> 后)
+            {lang === 'zh' ? '音频文件夹绝对路径 (仅适用于本地电脑终端)' : 'Absolute audio directory path (Runs natively on your local machine)'}
           </label>
           <div className="flex gap-2">
             <div className="relative flex-1">
@@ -347,7 +420,7 @@ export default function SettingsPanel({
                 type="text"
                 value={localPath}
                 onChange={(e) => setLocalPath(e.target.value)}
-                placeholder="例如:/Users/name/Music/baby 或 C:\Music\baby"
+                placeholder={lang === 'zh' ? "例如:/Users/name/Music/baby 或 C:\\Music\\baby" : "e.g., /Users/name/Music or C:\\Music"}
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 pl-9 text-xs focus:bg-white focus:border-indigo-500 focus:outline-hidden transition-all text-slate-800 font-mono"
               />
               <span className="absolute left-3 top-2.5 text-slate-400">
@@ -360,7 +433,9 @@ export default function SettingsPanel({
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shrink-0 disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-              {isScanning ? '扫描中...' : '扫描服务端'}
+              {isScanning 
+                ? (lang === 'zh' ? '扫描中...' : 'Scanning...') 
+                : (lang === 'zh' ? '扫描服务端' : 'Scan Server')}
             </button>
           </div>
         </form>
@@ -370,10 +445,10 @@ export default function SettingsPanel({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <label className="block text-xs font-semibold text-slate-600">
-            文件监听模式配置：<code>result.txt</code> 绝对路径
+            {lang === 'zh' ? '文件监听模式配置：result.txt 绝对路径' : 'OCR / File Polling: result.txt Absolute Path'}
           </label>
           <span className="text-[10px] bg-sky-50 text-sky-700 border border-sky-200 px-1.5 py-0.5 rounded font-mono">
-            全自动监听
+            {lang === 'zh' ? '全自动监听' : 'Auto Polling'}
           </span>
         </div>
         <div className="flex gap-2">
@@ -381,7 +456,7 @@ export default function SettingsPanel({
             type="text"
             value={localResultPath}
             onChange={(e) => setLocalResultPath(e.target.value)}
-            placeholder="例如: /Users/name/baby/result.txt"
+            placeholder={lang === 'zh' ? "例如: /Users/name/baby/result.txt" : "e.g., /Users/name/baby/result.txt"}
             className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:bg-white focus:border-indigo-500 focus:outline-hidden transition-all text-slate-800 font-mono"
           />
           <button
@@ -389,8 +464,40 @@ export default function SettingsPanel({
             onClick={() => setResultFilePath(localResultPath)}
             className="border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-medium text-xs px-3 py-2 rounded-lg transition-colors"
           >
-            保存文件路径
+            {lang === 'zh' ? '保存文件路径' : 'Save File Path'}
           </button>
+        </div>
+      </div>
+
+      {/* 间隔时长设置 / Waiting Interval Configurator */}
+      <div id="interval-settings-group" className="space-y-2 border-t border-slate-100 pt-3">
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-semibold text-slate-600">
+            {lang === 'zh' ? '播放间隔时长设置' : 'Waiting Interval Setting'}
+          </label>
+          <span className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded font-mono">
+            {lang === 'zh' ? '个性化调整' : 'Custom Interval'}
+          </span>
+        </div>
+        
+        <div className="space-y-2">
+          <div className="flex items-center space-x-3">
+            <span className="text-[11px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">30s</span>
+            <input
+              type="range"
+              min="30"
+              max="600"
+              step="15"
+              value={intervalSeconds}
+              onChange={(e) => setIntervalSeconds(Number(e.target.value))}
+              className="flex-1 accent-indigo-600 bg-slate-100 rounded-lg appearance-auto h-1.5 cursor-pointer"
+            />
+            <span className="text-[11px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">600s</span>
+          </div>
+          
+          <div className="flex justify-end text-xs font-semibold text-indigo-600">
+            {formatInterval(intervalSeconds)}
+          </div>
         </div>
       </div>
 
@@ -402,7 +509,7 @@ export default function SettingsPanel({
           className="w-full flex items-center justify-center gap-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-100 rounded-lg p-2.5 text-xs font-semibold transition-all shadow-2xs hover:shadow-xs group"
         >
           <Sparkles className="w-4 h-4 text-sky-500 group-hover:scale-110 transition-transform" />
-          <span>生成演示音频(WAV)</span>
+          <span>{lang === 'zh' ? '生成演示音频(WAV)' : 'Generate Demo Audios (WAV)'}</span>
         </button>
 
         <div className="grid grid-cols-2 gap-2">
@@ -411,7 +518,7 @@ export default function SettingsPanel({
             className="flex items-center justify-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-100 rounded-lg p-2.5 text-xs font-semibold transition-all shadow-2xs hover:shadow-xs"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
-            <span>导出 CSV 标签</span>
+            <span>{lang === 'zh' ? '导出 CSV 标签' : 'Export CSV Labels'}</span>
           </a>
 
           <a
@@ -419,7 +526,7 @@ export default function SettingsPanel({
             className="flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded-lg p-2.5 text-xs font-semibold transition-all shadow-2xs hover:shadow-xs"
           >
             <FileJson className="w-4 h-4 text-indigo-500" />
-            <span>导出 JSON 标签</span>
+            <span>{lang === 'zh' ? '导出 JSON 标签' : 'Export JSON Labels'}</span>
           </a>
         </div>
       </div>
@@ -427,8 +534,12 @@ export default function SettingsPanel({
       {/* Danger Zone */}
       <div className="flex items-center justify-between bg-red-50/70 border border-red-100 rounded-lg p-3">
         <div className="space-y-0.5">
-          <h4 className="text-xs font-semibold text-red-800">重置标记会话</h4>
-          <p className="text-[10px] text-red-600">擦除 progress.json 及 CSV 文件内容</p>
+          <h4 className="text-xs font-semibold text-red-800">
+            {lang === 'zh' ? '重置标记会话' : 'Reset All Markers'}
+          </h4>
+          <p className="text-[10px] text-red-600">
+            {lang === 'zh' ? '擦除 progress.json 及 CSV 文件内容' : 'Wipe progress.json and local CSV values'}
+          </p>
         </div>
         <button
           type="button"
@@ -443,19 +554,30 @@ export default function SettingsPanel({
       {/* Quick Summary Counts */}
       {totalFiles > 0 && (
         <div className="bg-slate-50 border border-slate-200/60 rounded-lg p-3 text-xs flex justify-between items-center text-slate-600 font-medium">
-          <span>总共扫描到: <strong className="text-slate-800 font-mono text-sm">{totalFiles}</strong> 首音频</span>
-          <span>未标注: <strong className="text-indigo-600 font-mono text-sm">{unlabeledCount}</strong> 首</span>
+          <span>
+            {lang === 'zh' ? '总共扫描到: ' : 'Total found: '}
+            <strong className="text-slate-800 font-mono text-sm">{totalFiles}</strong> 
+            {lang === 'zh' ? ' 首音频' : ' audios'}
+          </span>
+          <span>
+            {lang === 'zh' ? '未标注: ' : 'Unlabeled: '}
+            <strong className="text-indigo-600 font-mono text-sm">{unlabeledCount}</strong> 
+            {lang === 'zh' ? ' 首' : ''}
+          </span>
         </div>
       )}
 
       {/* Custom Reset Confirmation Modal */}
       {showResetConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fadeIn">
           <div className="bg-white rounded-lg p-6 max-w-sm mx-4 shadow-xl text-left">
-            <h3 className="font-semibold text-gray-900 mb-2 text-base">确认重置</h3>
+            <h3 className="font-semibold text-gray-900 mb-2 text-base">
+              {lang === 'zh' ? '确认重置' : 'Confirm Reset'}
+            </h3>
             <p className="text-sm text-gray-600 mb-4">
-              确定要删除本地标注 CSV 与 progress.json 吗？
-              此操作无法撤销。
+              {lang === 'zh' 
+                ? '确定要删除本地标注 CSV 与 progress.json 吗？此操作无法撤销。' 
+                : 'Are you sure you want to permanently erase all progress.json keys and your labeled CSV? This cannot be undone.'}
             </p>
             <div className="flex gap-2 justify-end">
               <button
@@ -463,7 +585,7 @@ export default function SettingsPanel({
                 onClick={() => setShowResetConfirm(false)}
                 className="px-4 py-2 text-sm text-gray-600 border rounded-md hover:bg-gray-50 cursor-pointer"
               >
-                取消
+                {lang === 'zh' ? '取消' : 'Cancel'}
               </button>
               <button
                 type="button"
@@ -473,7 +595,7 @@ export default function SettingsPanel({
                 }}
                 className="px-4 py-2 text-sm text-white bg-red-600 rounded-md hover:bg-red-700 cursor-pointer"
               >
-                确认重置
+                {lang === 'zh' ? '确认重置' : 'Reset Everything'}
               </button>
             </div>
           </div>

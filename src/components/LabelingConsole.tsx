@@ -6,8 +6,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Clipboard, FileText, CheckCircle2, ListFilter, AlertCircle, Copy, Radio, LogIn, RefreshCw, KeyRound } from 'lucide-react';
 import { LABELS, LabelKey, LabelMode, AudioFile } from '../types';
+import { Language, getTranslations } from '../lib/i18n';
 
 interface LabelingConsoleProps {
+  lang: Language;
   currentFile: AudioFile | null;
   isPlaying: boolean;
   onSaveLabel: (label: string) => void;
@@ -19,6 +21,7 @@ interface LabelingConsoleProps {
 }
 
 export default function LabelingConsole({
+  lang,
   currentFile,
   isPlaying,
   onSaveLabel,
@@ -28,6 +31,16 @@ export default function LabelingConsole({
   resultFilePath,
   isWaitingInterval
 }: LabelingConsoleProps) {
+  const t = getTranslations(lang);
+  const getDisplayLabel = (lbl: string) => {
+    if (lang === 'zh') return lbl;
+    if (lbl === '饥饿') return t.hungry;
+    if (lbl === '不舒服') return t.uncomfortable;
+    if (lbl === '犯困') return t.sleepy;
+    if (lbl === '需要拍嗝') return t.burp;
+    if (lbl === '烦躁') return t.agitated;
+    return lbl;
+  };
   const [directStatus, setDirectStatus] = useState<'connected' | 'disconnected' | 'error'>("disconnected");
   const [clipboardStatus, setClipboardStatus] = useState<string>("inactive"); // active, inactive, blocked
   const [clipboardContent, setClipboardContent] = useState<string>("");
@@ -154,14 +167,19 @@ export default function LabelingConsole({
         credentials: 'omit'
       });
       if (response.ok) {
-        const data = await response.json();
-        setDirectStatus("connected");
-        if (data.label) {
-          addLog(`从[本地直连助手]自动匹配成功 ➔ "${data.label}"`, 'success');
-          onSaveLabel(data.label);
-        } else if (data.skip) {
-          addLog(`从[本地直连助手]接收到跳过音轨指令`, 'warn');
-          if (onSkip) onSkip();
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+          setDirectStatus("connected");
+          if (data.label) {
+            addLog(`从[本地直连助手]自动匹配成功 ➔ "${data.label}"`, 'success');
+            onSaveLabel(data.label);
+          } else if (data.skip) {
+            addLog(`从[本地直连助手]接收到跳过音轨指令`, 'warn');
+            if (onSkip) onSkip();
+          }
+        } else {
+          setDirectStatus("connected");
         }
       } else {
         setDirectStatus("error");
@@ -244,16 +262,19 @@ export default function LabelingConsole({
         setFileStatus("error");
         return;
       }
-      const data = await response.json();
-      if (data.exists) {
-        setFileStatus("connected");
-        const text = data.content;
-        if (text && text !== fileContent) {
-          setFileContent(text);
-          tryMatchingAndLabel(text, "result.txt 监听记录");
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await response.json();
+        if (data.exists) {
+          setFileStatus("connected");
+          const text = data.content;
+          if (text && text !== fileContent) {
+            setFileContent(text);
+            tryMatchingAndLabel(text, "result.txt 监听记录");
+          }
+        } else {
+          setFileStatus("disconnected");
         }
-      } else {
-        setFileStatus("disconnected");
       }
     } catch (err) {
       setFileStatus("error");
@@ -298,10 +319,14 @@ export default function LabelingConsole({
           <div className="p-1.5 bg-indigo-50 text-indigo-700 rounded-md">
             <Radio className="w-5 h-5 animate-pulse" />
           </div>
-          <h2 className="font-semibold text-slate-800 text-md">3. 模式选择与数据标注</h2>
+          <h2 className="font-semibold text-slate-800 text-md">
+            {lang === 'zh' ? '3. 模式选择与数据标注' : '3. Mode Selection & Labeling'}
+          </h2>
         </div>
         <div className="text-xs text-slate-400 font-mono">
-          状态: {currentFile ? (isWaitingInterval ? '⏳ 间隔中' : '🔊 正在播放') : '📭 空闲'}
+          {lang === 'zh' 
+            ? `状态: ${currentFile ? (isWaitingInterval ? '⏳ 间隔中' : '🔊 正在播放') : '📭 空闲'}`
+            : `Status: ${currentFile ? (isWaitingInterval ? '⏳ Delay' : '🔊 Playing') : '📭 Idle'}`}
         </div>
       </div>
 
@@ -318,8 +343,8 @@ export default function LabelingConsole({
           }`}
         >
           <KeyRound className={`w-4 h-4 ${labelMode === 'manual' ? 'text-indigo-600' : 'text-slate-400'}`} />
-          <span className="text-xs font-semibold">1. 手动模式</span>
-          <span className="text-[9px] text-slate-400">键盘快捷键或点选</span>
+          <span className="text-xs font-semibold">{lang === 'zh' ? '1. 手动模式' : '1. Manual Mode'}</span>
+          <span className="text-[9px] text-slate-400">{lang === 'zh' ? '键盘快捷键或点选' : 'Keyboard hotkeys / click'}</span>
         </button>
 
         {/* Mode 1.5: Direct Local Helper */}
@@ -334,10 +359,10 @@ export default function LabelingConsole({
         >
           <Radio className={`w-4 h-4 ${labelMode === 'direct' ? 'text-emerald-600 animate-pulse' : 'text-slate-400'}`} />
           <span className="text-xs font-semibold flex items-center gap-1">
-            2. 助手直连模式
-            <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 rounded-sm">推荐</span>
+            {lang === 'zh' ? '2. 助手直连模式' : '2. Direct Connection'}
+            <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 rounded-sm">{lang === 'zh' ? '推荐' : 'Pro'}</span>
           </span>
-          <span className="text-[9px] text-slate-400">免剪贴板 免聚焦 全自动</span>
+          <span className="text-[9px] text-slate-400">{lang === 'zh' ? '免剪贴板 免聚焦 全自动' : 'No Clipboard / Auto'}</span>
         </button>
 
         {/* Mode 2: Clipboard */}
@@ -351,8 +376,8 @@ export default function LabelingConsole({
           }`}
         >
           <Clipboard className={`w-4 h-4 ${labelMode === 'clipboard' ? 'text-slate-800' : 'text-slate-400'}`} />
-          <span className="text-xs font-semibold">3. 剪贴板模式</span>
-          <span className="text-[9px] text-slate-400">支持复制/备份粘贴</span>
+          <span className="text-xs font-semibold">{lang === 'zh' ? '3. 剪贴板模式' : '3. Clipboard Mode'}</span>
+          <span className="text-[9px] text-slate-400">{lang === 'zh' ? '支持复制/备份粘贴' : 'Copy & paste fallback'}</span>
         </button>
 
         {/* Mode 3: File Listener */}
@@ -366,8 +391,8 @@ export default function LabelingConsole({
           }`}
         >
           <FileText className={`w-4 h-4 ${labelMode === 'file' ? 'text-indigo-600' : 'text-slate-400'}`} />
-          <span className="text-xs font-semibold">4. 文件监听模式</span>
-          <span className="text-[9px] text-slate-400">实时读取 result.txt</span>
+          <span className="text-xs font-semibold">{lang === 'zh' ? '4. 文件监听模式' : '4. File Monitor Mode'}</span>
+          <span className="text-[9px] text-slate-400">{lang === 'zh' ? '实时读取 result.txt' : 'Poll local result.txt'}</span>
         </button>
       </div>
 
@@ -377,8 +402,12 @@ export default function LabelingConsole({
         {labelMode === 'manual' && (
           <div className="space-y-3.5">
             <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-slate-700">手动快速标签 (支持键盘物理按键 1 - 5)</span>
-              <span className="text-[10px] text-slate-400 bg-slate-200/60 px-2 py-0.5 rounded-sm font-mono">无输入时生效</span>
+              <span className="text-xs font-bold text-slate-700">
+                {lang === 'zh' ? '手动快速标签 (支持键盘物理按键 1 - 5)' : 'Quick Label Buttons (Supports Keyboard Keys 1 - 5)'}
+              </span>
+              <span className="text-[10px] text-slate-400 bg-slate-200/60 px-2 py-0.5 rounded-sm font-mono">
+                {lang === 'zh' ? '无输入时生效' : 'Active when not typing'}
+              </span>
             </div>
 
             {/* Clickable Quick Color Buttons */}
@@ -395,8 +424,10 @@ export default function LabelingConsole({
                   className={`px-3 py-2.5 rounded-lg text-xs font-bold transition-all shadow-3xs hover:shadow-2xs active:scale-95 disabled:opacity-40 disabled:pointer-events-none cursor-pointer border border-black/10 ${details.color}`}
                 >
                   <div className="flex flex-col items-center gap-0.5">
-                    <span>{details.label}</span>
-                    <span className="text-[10px] opacity-75 font-mono">按键 {details.keys[0]}</span>
+                    <span>{getDisplayLabel(details.label)}</span>
+                    <span className="text-[10px] opacity-75 font-mono">
+                      {lang === 'zh' ? `按键 ${details.keys[0]}` : `Key ${details.keys[0]}`}
+                    </span>
                   </div>
                 </button>
               ))}
@@ -407,37 +438,54 @@ export default function LabelingConsole({
         {labelMode === 'direct' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-700">🚀 本地助手智能直连服务 (免剪贴板/免聚焦)</span>
+              <span className="text-xs font-bold text-slate-700">
+                {lang === 'zh' ? '🚀 本地助手智能直连服务 (免剪贴板/免聚焦)' : '🚀 Local Smart Direct Syncer (Clipboard-free)'}
+              </span>
               <span className="text-xs font-mono">
-                {directStatus === 'connected' && <span className="text-emerald-600 font-semibold animate-pulse">● 助手已连接</span>}
-                {directStatus === 'disconnected' && <span className="text-slate-500">○ 正在等待连接...</span>}
-                {directStatus === 'error' && <span className="text-amber-500 font-medium">⚠️ 尝试连接本地 127.0.0.1:3124</span>}
+                {directStatus === 'connected' && <span className="text-emerald-600 font-semibold animate-pulse">{lang === 'zh' ? '● 助手已连接' : '● Helper Connected'}</span>}
+                {directStatus === 'disconnected' && <span className="text-slate-500">{lang === 'zh' ? '○ 正在等待连接...' : '○ Waiting helper connect...'}</span>}
+                {directStatus === 'error' && <span className="text-amber-500 font-medium">{lang === 'zh' ? '⚠️ 尝试连接本地 127.0.0.1:3124' : '⚠️ Retrying local port 3124'}</span>}
               </span>
             </div>
 
             {directStatus !== 'connected' ? (
               <div className="bg-amber-50/80 text-amber-800 text-[11px] p-3 leading-relaxed rounded-lg border border-amber-200/50 space-y-1.5">
                 <p className="font-semibold text-amber-900 flex items-center gap-1">
-                  🔧 未检测到本地智能助手连接：
+                  {lang === 'zh' ? '🔧 未检测到本地智能助手连接：' : '🔧 Local helper not detected:'}
                 </p>
                 <p>
-                  由于浏览器对系统剪贴板有着极高安全限制（窗口失去焦点、或身处预览 iframe 内时会自动<b>拒绝读取</b>），我们<b>独家支持不依赖剪贴板的“100%自动直连通道”</b>！
+                  {lang === 'zh'
+                    ? '由于浏览器对系统剪贴板有着极高安全限制（窗口失去焦点、或身处预览 iframe 内时会自动拒绝读取），我们独家支持不依赖剪贴板的“100%自动直连通道”！'
+                    : 'Since browsers strictly restrict system clipboard access inside preview sandboxed iframes, clipboard polls fail out of focus. We support fully-automated direct API synchronization instead!'}
                 </p>
                 <p className="text-slate-650">
-                  您只需执行最新版本的本地脚本，它会自动通过本地回环网络开启轻量的 API 服务，由网页自动从其收发状态并全自动极速标注。
+                  {lang === 'zh'
+                    ? '您只需执行最新版本的本地脚本，它会自动通过本地回环网络开启轻量的 API 服务，由网页自动从其收发状态并全自动极速标注。'
+                    : 'Run the python script baby_cry_ocr_helper.py. It initiates a local feedback network API server, enabling the web page to auto-label and advance tracks securely with zero lag.'}
                 </p>
               </div>
             ) : (
               <div className="bg-emerald-50/55 text-emerald-800 text-[11px] p-3 leading-relaxed rounded-lg border border-emerald-200/50 space-y-1">
-                <p className="font-semibold text-emerald-900">✨ 自动直连服务已成功激活！</p>
-                <p>网页正在与您本地的 Python 脚本高频双向。在音轨进入间隔期（Waiting Interval）时，本地脚本会自动提取手机屏幕文字，解析出标签后立即直接通知网页自动标注、切歌，即使网页在后台也能完美畅快运行！</p>
+                <p className="font-semibold text-emerald-900">
+                  {lang === 'zh' ? '✨ 自动直连服务已成功激活！' : '✨ Syncer Activated successfully!'}
+                </p>
+                <p>
+                  {lang === 'zh'
+                    ? '网页正在与您本地的 Python 脚本高频双向。在音轨进入间隔期（Waiting Interval）时，本地脚本会自动提取手机屏幕文字，解析出标签后立即直接通知网页自动标注、切歌，即使网页在后台也能完美畅快运行！'
+                    : 'Bidirectional sync is high frequency. During the Waiting Interval, the script OCRs the screen to detect baby states, automatically labels current track and plays next—runs perfectly even in the background!'}
+                </p>
               </div>
             )}
 
             <div className="text-[10px] text-slate-500 font-mono bg-white p-2.5 rounded-lg border border-slate-100 flex flex-col gap-1">
               <div className="flex justify-between">
-                <span>直连回环 API 端点: <code className="text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded font-mono">http://127.0.0.1:3124/sync</code></span>
-                <span className="text-[9px] text-slate-400">（不流经公网，保障隐私，0 延迟）</span>
+                <span>
+                  {lang === 'zh' ? '直连回环 API 端点:' : 'Local API Endpoint:'}{' '}
+                  <code className="text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded font-mono">http://127.0.0.1:3124/sync</code>
+                </span>
+                <span className="text-[9px] text-slate-400">
+                  {lang === 'zh' ? '（不流经公网，保障隐私，0 延迟）' : '(No cloud routing, private, 0ms latency)'}
+                </span>
               </div>
             </div>
           </div>
@@ -446,12 +494,14 @@ export default function LabelingConsole({
         {labelMode === 'clipboard' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-700">剪贴板半自动监听匹配</span>
+              <span className="text-xs font-bold text-slate-700">
+                {lang === 'zh' ? '剪贴板半自动监听匹配' : 'Clipboard Semi-Auto Poller'}
+              </span>
               <span className="text-xs font-mono">
-                {clipboardStatus === 'active' && <span className="text-emerald-600">● 1.5s轮询检测中</span>}
-                {clipboardStatus === 'waiting_focus' && <span className="text-amber-500 animate-pulse font-semibold">● 运行中 (请点击页面聚焦)</span>}
-                {clipboardStatus === 'inactive' && <span className="text-slate-500">○ 已停用</span>}
-                {clipboardStatus === 'blocked' && <span className="text-red-500 font-semibold">⚠️ 浏览器策略或沙盒限制</span>}
+                {clipboardStatus === 'active' && <span className="text-emerald-600">{lang === 'zh' ? '● 1.5s轮询检测中' : '● 1.5s Polling active'}</span>}
+                {clipboardStatus === 'waiting_focus' && <span className="text-amber-500 animate-pulse font-semibold">{lang === 'zh' ? '● 运行中 (请点击页面聚焦)' : '● Polling (Please click page to focus)'}</span>}
+                {clipboardStatus === 'inactive' && <span className="text-slate-500">{lang === 'zh' ? '○ 已停用' : '○ Deactivated'}</span>}
+                {clipboardStatus === 'blocked' && <span className="text-red-500 font-semibold">{lang === 'zh' ? '⚠️ 浏览器策略或沙盒限制' : '⚠️ Sandbox frame limits'}</span>}
               </span>
             </div>
 
@@ -460,8 +510,12 @@ export default function LabelingConsole({
                 <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                 <p>
                   {clipboardStatus === 'waiting_focus' 
-                    ? "提示: 当您切换至 scrcpy 或其他应用程序时，浏览器为了安全性会暂停剪贴板监控。请轻点一下此网页，即可瞬间重新激活高频轮询！"
-                    : "由于 AI Studio 沙盒预览环境存在跨域安全保护，直接在 iframe 内访问系统剪贴板可能被拦截。可点击下方手动粘贴，或者点击右上角“新建标签页打开”获得完整读取权限。"
+                    ? (lang === 'zh' 
+                        ? '提示: 当您切换至 scrcpy 或其他应用程序时，浏览器为了安全性会暂停剪贴板监控。请轻点一下此网页，即可瞬间重新激活高频轮询！'
+                        : 'Tip: Browser pauses clipboard monitoring when you focus scrcpy or other apps. Click anywhere on this page to reactivate polling!')
+                    : (lang === 'zh'
+                        ? '由于 AI Studio 沙盒预览环境存在跨域安全保护，直接在 iframe 内访问系统剪贴板可能被拦截。可点击下方手动粘贴，或者点击右上角“新建标签页打开”获得完整读取权限。'
+                        : 'Since AI Studio preview runs inside an iframe, direct system clipboard queries might be blocked. Paste manually below, or choose "Open in new tab" from the top-right.')
                   }
                 </p>
               </div>
@@ -471,7 +525,7 @@ export default function LabelingConsole({
             <form onSubmit={handleManualPasteSubmit} className="flex gap-2">
               <input
                 type="text"
-                placeholder="在此粘贴 AI 结果 (如 'hungry', '需要拍嗝', 'pain')"
+                placeholder={lang === 'zh' ? "在此粘贴 AI 结果 (如 'hungry', '需要拍嗝', 'pain')" : "Paste AI text results here (e.g., 'hungry', 'pain', 'burp')"}
                 value={manualPasteText}
                 onChange={(e) => setManualPasteText(e.target.value)}
                 className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-indigo-500 focus:bg-white"
@@ -481,14 +535,14 @@ export default function LabelingConsole({
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-4 py-2 rounded-lg transition-colors flex items-center gap-1"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span>立即匹配</span>
+                <span>{lang === 'zh' ? '立即匹配' : 'Match'}</span>
               </button>
             </form>
 
             <div className="text-[11px] text-slate-400 font-mono bg-white p-2 rounded border border-slate-100 flex justify-between items-center">
-              <span>当前剪贴板缓存：</span>
+              <span>{lang === 'zh' ? '当前剪贴板缓存：' : 'Clipboard buffer:'}</span>
               <strong className="text-slate-700 truncate max-w-[200px]" title={clipboardContent}>
-                {clipboardContent || "(空 / 暂未识别)"}
+                {clipboardContent || (lang === 'zh' ? '(空 / 暂未识别)' : '(Empty / Unrecognized)')}
               </strong>
             </div>
           </div>
@@ -498,18 +552,20 @@ export default function LabelingConsole({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-700 font-mono">
-                {isCloudEnv ? "☁️ 云端 API 自动化接收" : "文件轮询结果监听器 (result.txt)"}
+                {lang === 'zh' 
+                  ? (isCloudEnv ? "☁️ 云端 API 自动化接收" : "文件轮询结果监听器 (result.txt)")
+                  : (isCloudEnv ? "☁️ Cloud Gateway API Direct" : "Local File Poller (result.txt)")}
               </span>
               <span>
                 {isCloudEnv ? (
                   <span className="text-indigo-600 text-[10px] font-bold font-mono animate-pulse bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full select-none">
-                    ● 云网关就绪 (免文件同步)
+                    {lang === 'zh' ? '● 云网关就绪 (免文件同步)' : '● Cloud Gateway Ready'}
                   </span>
                 ) : (
                   <>
-                    {fileStatus === 'connected' && <span className="text-emerald-600 text-xs font-mono">● 监听中 | 连接正常</span>}
-                    {fileStatus === 'disconnected' && <span className="text-slate-500 text-xs font-mono">○ 未找到目标文件</span>}
-                    {fileStatus === 'error' && <span className="text-red-500 text-xs font-semibold font-mono">⚠️ 读取异常</span>}
+                    {fileStatus === 'connected' && <span className="text-emerald-600 text-xs font-mono">{lang === 'zh' ? '● 监听中 | 连接正常' : '● Polling | Connected'}</span>}
+                    {fileStatus === 'disconnected' && <span className="text-slate-500 text-xs font-mono">{lang === 'zh' ? '○ 未找到目标文件' : '○ Target file not found'}</span>}
+                    {fileStatus === 'error' && <span className="text-red-500 text-xs font-semibold font-mono">{lang === 'zh' ? '⚠️ 读取异常' : '⚠️ Read failed'}</span>}
                   </>
                 )}
               </span>
@@ -518,24 +574,38 @@ export default function LabelingConsole({
             {isCloudEnv ? (
               <div className="text-[11px] text-slate-600 font-normal leading-relaxed space-y-1.5 bg-indigo-50/30 p-3 rounded-lg border border-indigo-100/50">
                 <p>
-                  🚀 <b>云同步运行中：</b>因浏览器处于沙盒环境，本地 Python 脚本启动后遇到报警会直接通过安全网关 HTTP API <strong>向本网页实时交互与标注控制</strong>，因此即便处于云端预览也可无阻使用！
+                  {lang === 'zh' ? (
+                    <>
+                      🚀 <b>云同步运行中：</b>因浏览器处于沙盒环境，本地 Python 脚本启动后遇到报警会直接通过安全网关 HTTP API <strong>向本网页实时交互与标注控制</strong>，因此即便处于云端预览也可无阻使用！
+                    </>
+                  ) : (
+                    <>
+                      🚀 <b>Cloud Sync Active:</b> Since the browser is inside a sandbox container, the local Python script invokes the secure Gateway HTTP API to <strong>interact and trigger labels on this tab in real-time</strong>. It works perfectly even in preview mode!
+                    </>
+                  )}
                 </p>
                 <div className="text-[10px] text-indigo-900 bg-white border border-indigo-100/60 p-2 rounded-md font-mono select-all select-none">
-                  请确保本地 <code>baby_cry_ocr_helper.py</code> 顶部配置为：<br/>
+                  {lang === 'zh' ? '请确保本地 baby_cry_ocr_helper.py 顶部配置为：' : 'Ensure baby_cry_ocr_helper.py compiles with SERVER_URL:'}<br/>
                   <strong className="text-indigo-600 block mt-1 break-all select-all">SERVER_URL = "{window.location.origin}"</strong>
                 </div>
               </div>
             ) : (
               <>
                 <p className="text-[11px] text-slate-500">
-                  请确保目标应用程序将结果实时写入指定目录。
-                  当前已加载内容: <code className="bg-slate-200/70 border px-1.5 py-0.5 rounded font-mono text-slate-800">{fileContent || "(等待写入...)"}</code>
+                  {lang === 'zh' 
+                    ? '请确保目标应用程序将结果实时写入指定目录。当前已加载内容: ' 
+                    : 'Ensure the helper writes ocr results to your local directory. Loaded content: '}
+                  <code className="bg-slate-200/70 border px-1.5 py-0.5 rounded font-mono text-slate-800">
+                    {fileContent || (lang === 'zh' ? '(等待写入...)' : '(Waiting for sync...)')}
+                  </code>
                 </p>
 
                 <div className="flex gap-2 text-[10px] bg-sky-50 text-sky-800 p-2.5 rounded border border-sky-100 flex-col md:flex-row justify-between items-stretch md:items-center">
-                  <span className="font-semibold">💡 演示验证提示:</span>
+                  <span className="font-semibold">{lang === 'zh' ? '💡 演示验证提示:' : '💡 Demo Verification Tip:'}</span>
                   <span className="leading-normal">
-                    为了测试这个功能，您可以选择 Demo 文件夹 <code>./demo_audios/result.txt</code> 并写入任意预设文本即可直接进行自动匹配打标签。
+                    {lang === 'zh'
+                      ? '为了测试这个功能，您可以选择 Demo 文件夹 ./demo_audios/result.txt 并写入任意预设文本即可直接进行自动匹配打标签。'
+                      : 'To test, write preset keywords into `./demo_audios/result.txt` to trigger real-time auto matching on this component.'}
                   </span>
                 </div>
               </>
@@ -546,11 +616,15 @@ export default function LabelingConsole({
 
       {/* Keywords collapsible reference mapping guide */}
       <div className="bg-slate-50 rounded-lg p-3 text-xs border border-slate-200/40 text-slate-600 space-y-2">
-        <span className="font-semibold text-slate-700 block">自动关键词匹配表 (含多语言中英文)：</span>
+        <span className="font-semibold text-slate-700 block">
+          {lang === 'zh' ? '自动关键词匹配表 (含多语言中英文)：' : 'Auto Keyword Mapping Rules:'}
+        </span>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2 pt-1 font-mono text-[10px]">
           {Object.entries(LABELS).map(([key, details]) => (
             <div key={key} className="bg-white border rounded p-1.5 flex flex-col space-y-1">
-              <span className="font-bold text-slate-800 border-b pb-1 text-xs">{details.label}</span>
+              <span className="font-bold text-slate-800 border-b pb-1 text-xs">
+                {getDisplayLabel(details.label)}
+              </span>
               <span className="text-slate-500 leading-tight">
                 {details.keywords.join(', ')}
               </span>
@@ -562,18 +636,20 @@ export default function LabelingConsole({
       {/* Action Timeline Logs */}
       <div className="space-y-2 pt-1">
         <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
-          <span>操作与匹配日志 (Time logs)</span>
+          <span>{lang === 'zh' ? '操作与匹配日志 (Time logs)' : 'Activity & Match Logs (Time logs)'}</span>
           <button
             onClick={() => setLogs([])}
             className="hover:text-slate-700 underline text-[10px]"
           >
-            清空日志
+            {lang === 'zh' ? '清空日志' : 'Clear'}
           </button>
         </div>
         <div className="border border-slate-200/70 rounded-lg p-3 h-32 overflow-y-auto bg-slate-950 font-mono text-[11px] text-slate-300 space-y-1.5 scrollbar-thin">
           {logs.length === 0 ? (
             <div className="text-slate-600 text-center py-6">
-              暂无匹配或分析日志。进行文件夹扫描或播放后开始。
+              {lang === 'zh' 
+                ? '暂无匹配或分析日志。进行文件夹扫描或播放后开始。' 
+                : 'No match logs yet. Scanning folders or playing tracks will populate items.'}
             </div>
           ) : (
             logs.map((log, index) => (

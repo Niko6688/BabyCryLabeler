@@ -23,8 +23,17 @@ export function registerLocalFiles(files: File[], isDragAndDrop: boolean = false
     const key = `local-file://${file.name}-${file.size}-${index}-${suffix}`;
     localFileMap.set(key, file);
     
-    // 拖拽模式下 rel = name = 文件名
-    const relPath = isDragAndDrop ? file.name : (file.webkitRelativePath || file.name);
+    // 采用更安全、精准的相对路径生成方案：
+    const rel = file.webkitRelativePath || (file as any).relativePath || file.name;
+    let relPath = rel;
+    if (rel && rel.includes('/')) {
+      // 去掉第一级：dev/1012/B/file.wav → 1012/B/file.wav
+      const parts = rel.split('/');
+      relPath = parts.slice(1).join('/');
+    } else {
+      // 单文件或无路径，直接用文件名
+      relPath = file.name;
+    }
 
     list.push({
       name: file.name,

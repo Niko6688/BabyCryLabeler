@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Volume2, FileAudio, Check, AlertTriangle, Layers, Trophy, Cpu, LogOut } from 'lucide-react';
+import { Volume2, FileAudio, Check, AlertTriangle, Layers, Trophy, Cpu, LogOut, Languages } from 'lucide-react';
 import { AudioFile, ProgressData, LabelMode, PlaybackMode } from './types';
 import SettingsPanel from './components/SettingsPanel';
 import AudioPlayer from './components/AudioPlayer';
@@ -12,10 +12,17 @@ import LabelingConsole from './components/LabelingConsole';
 import QueueList from './components/QueueList';
 import StatisticsDashboard from './components/StatisticsDashboard';
 import { registerLocalFiles, clearAllLocalFiles } from './lib/localFilesRegistry';
+import { Language, getTranslations } from './lib/i18n';
 
 const UPLOADED_PREFIX = '[uploaded]';
 
 export default function App() {
+  // Localization language
+  const [lang, setLang] = useState<Language>(() => {
+    return (localStorage.getItem('app_lang') as Language) || 'zh';
+  });
+  const t = useMemo(() => getTranslations(lang), [lang]);
+
   // Scanned lists
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [backendProgress, setBackendProgress] = useState<Record<string, any>>({});
@@ -62,6 +69,16 @@ export default function App() {
   const [isWaitingInterval, setIsWaitingInterval] = useState(false);
   const [waitingSecondsLeft, setWaitingSecondsLeft] = useState(0);
   const [skipWaitAfterLastTrack, setSkipWaitAfterLastTrack] = useState(true);
+  const [intervalSeconds, setIntervalSeconds] = useState<number>(() => {
+    const saved = localStorage.getItem('interval_seconds');
+    if (saved) {
+      const parsed = parseInt(saved, 10);
+      if (!isNaN(parsed) && parsed >= 30 && parsed <= 600) {
+        return parsed;
+      }
+    }
+    return 300; // default 300
+  });
 
   // Selection configurations
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('order');
@@ -83,8 +100,16 @@ export default function App() {
   }, [scannedPath]);
 
   useEffect(() => {
+    localStorage.setItem('app_lang', lang);
+  }, [lang]);
+
+  useEffect(() => {
     localStorage.setItem('audio_result_file_path', resultFilePath);
   }, [resultFilePath]);
+
+  useEffect(() => {
+    localStorage.setItem('interval_seconds', intervalSeconds.toString());
+  }, [intervalSeconds]);
 
   // Handle waiting interval counter decrements
   useEffect(() => {
@@ -127,7 +152,8 @@ export default function App() {
             absolutePath: currentFile?.absolutePath || null
           })
         });
-        if (response.ok && active) {
+        const contentType = response.headers.get("content-type");
+        if (response.ok && active && contentType && contentType.includes("application/json")) {
           const data = await response.json();
           // Check if there is a command waiting from the server (e.g. from Python assistant API)
           if (data.command) {
@@ -136,10 +162,8 @@ export default function App() {
             await fetch('/api/clear-playback-command', { method: 'POST' });
             
             if (command === "skip") {
-              console.log("[自动标注] 从服务端收到跳过指令，执行中...");
               handleSkipTrack();
             } else if (command === "label" && data.label) {
-              console.log(`[自动标注] 从服务端收到有效标签 ➔ "${data.label}"`);
               handleSaveLabel(data.label);
             }
           }
@@ -164,7 +188,8 @@ export default function App() {
   const fetchProgress = async () => {
     try {
       const res = await fetch('/api/progress');
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
         setBackendProgress(data);
       }
@@ -184,20 +209,47 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok && data.files) {
-        setFiles(data.files);
-        setScannedPath(data.scannedPath);
+        const incomingFiles: AudioFile[] = data.files;
+        const existingKeys = new Set(
+          files.map(f => f.absolutePath || `[uploaded]${f.name}`)
+        );
+
+        const newFiles = incomingFiles.filter(f => {
+          const key = f.absolutePath || `[uploaded]${f.name}`;
+          return !existingKeys.has(key);
+        });
+
         if (!isInitial) {
-          alert(`目录扫描成功！共找到 ${data.files.length} 个音频文件。`);
-        }
-        // If there's a queue loaded, default select the first unlabeled track
-        if (data.files.length > 0) {
-          const unlabeled = data.files.find((f: AudioFile) => !progress[f.path]?.label);
-          if (unlabeled) {
-            setCurrentFile(unlabeled);
+          if (newFiles.length === 0) {
+            alert("未发现新文件，当前列表已是最新");
           } else {
-            setCurrentFile(data.files[0]);
+            alert(`目录扫描成功！共找到 ${incomingFiles.length} 个音频文件，其中新增 ${newFiles.length} 个。`);
           }
         }
+
+        if (newFiles.length > 0) {
+          setFiles(prev => [...prev, ...newFiles]);
+          
+          if (!currentFile) {
+            const unlabeled = newFiles.find((f: AudioFile) => !progress[f.path]?.label);
+            if (unlabeled) {
+              setCurrentFile(unlabeled);
+            } else {
+              setCurrentFile(newFiles[0]);
+            }
+          }
+        } else {
+          if (!currentFile && files.length > 0) {
+            const unlabeled = files.find((f: AudioFile) => !progress[f.path]?.label);
+            if (unlabeled) {
+              setCurrentFile(unlabeled);
+            } else {
+              setCurrentFile(files[0]);
+            }
+          }
+        }
+
+        setScannedPath(data.scannedPath);
       } else {
         if (!isInitial) {
           alert(data.error || "扫描目录失败");
@@ -245,6 +297,7 @@ export default function App() {
         setIsPlaying(false);
         setIsWaitingInterval(false);
         setWaitingSecondsLeft(0);
+        setIntervalSeconds(300);
         
         // 2. Clear client-side file uploads registry
         clearAllLocalFiles();
@@ -256,6 +309,7 @@ export default function App() {
         // 4. Remove items from localStorage
         localStorage.removeItem('audio_scanned_path');
         localStorage.removeItem('audio_result_file_path');
+        localStorage.removeItem('interval_seconds');
 
         alert("标注会话清理完毕！所有前端状态、音频列表、标注结果与路径缓存均已完全重置。");
       }
@@ -269,8 +323,23 @@ export default function App() {
     const fileArray = Array.isArray(uploadedFileList) ? uploadedFileList : Array.from(uploadedFileList);
     const list = registerLocalFiles(fileArray, isDragAndDrop);
     if (list.length > 0) {
-      setFiles(prev => [...list, ...prev]);
-      setCurrentFile(list[0]);
+      const existingKeys = new Set(
+        files.map(f => f.absolutePath || `[uploaded]${f.name}`)
+      );
+
+      const newFiles = list.filter(f => {
+        const key = f.absolutePath || `[uploaded]${f.name}`;
+        return !existingKeys.has(key);
+      });
+
+      if (newFiles.length > 0) {
+        setFiles(prev => [...prev, ...newFiles]);
+        if (!currentFile) {
+          setCurrentFile(newFiles[0]);
+        }
+      } else {
+        alert("未发现新文件，当前列表已是最新");
+      }
     }
   };
 
@@ -310,9 +379,9 @@ export default function App() {
       }
     }
 
-    // 延迟间歇：为了完美兼容手机端（图灵看护 App）在播放完音频后由于神经网络分析导致的2-3分钟延迟，
-    // 我们将等待计时上限设为 300 秒（5分钟）。一旦 Python 脚本扫描到了分类词，网页会瞬时捕获并跳转下一首，不会有任何不必要的空等！
-    const waitTime = 300; 
+    // 延迟间歇：为了完美兼容手机端（图灵看护 App）在播放完音频后由于神经网络分析导致的延迟，
+    // 我们将等待计时上限设为动态调整的设置值。一旦 Python 脚本扫描到了分类词，网页会瞬时捕获并跳转下一首，不会有任何不必要的空等！
+    const waitTime = intervalSeconds; 
     // Check if this is the last track
     const isLastTrack = checkIfLastTrackFinished();
     if (isLastTrack && skipWaitAfterLastTrack) {
@@ -453,19 +522,28 @@ export default function App() {
           </div>
           <div>
             <h1 className="font-extrabold text-slate-950 tracking-tight text-lg">
-              自动音频标注系统 <span className="font-normal text-slate-400">| Auto Audio Labeler</span>
+              {t.title} <span className="font-normal text-slate-400">| Auto Audio Labeler</span>
             </h1>
             <p className="text-xs text-slate-500 font-medium">
-              音频队列循环播放 + 随机延时间歇等待 + 全自动剪贴板及文件轮询匹配导出工具
+              {t.subtitle}
             </p>
           </div>
         </div>
 
         {/* Status badges */}
         <div className="flex items-center gap-3">
+          <button
+            id="lang-switcher-btn"
+            onClick={() => setLang(prev => prev === 'zh' ? 'en' : 'zh')}
+            className="flex items-center space-x-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-3 py-1.5 rounded-full text-xs transition-colors cursor-pointer"
+          >
+            <Languages className="w-3.5 h-3.5 text-indigo-500" />
+            <span>{lang === 'zh' ? 'English' : '中文'}</span>
+          </button>
+
           <div className="flex items-center space-x-1.5 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200 text-xs">
             <Cpu className="w-3.5 h-3.5 text-indigo-500" />
-            <span className="text-slate-600 font-mono font-bold">本地运行环境</span>
+            <span className="text-slate-600 font-mono font-bold">{t.localEnv}</span>
           </div>
         </div>
       </header>
@@ -476,6 +554,7 @@ export default function App() {
         {/* Left Side: Directory input, Scanned Lists and analytics (size: lg:col-span-5) */}
         <div className="lg:col-span-5 space-y-6 flex flex-col justify-start">
           <SettingsPanel
+            lang={lang}
             scannedPath={scannedPath}
             setScannedPath={setScannedPath}
             resultFilePath={resultFilePath}
@@ -487,9 +566,12 @@ export default function App() {
             totalFiles={totalFiles}
             unlabeledCount={unlabeledCount}
             onUploadLocalAudios={handleUploadLocalAudios}
+            intervalSeconds={intervalSeconds}
+            setIntervalSeconds={setIntervalSeconds}
           />
 
           <QueueList
+            lang={lang}
             files={files}
             progress={progress}
             currentFile={currentFile}
@@ -500,6 +582,7 @@ export default function App() {
           />
 
           <StatisticsDashboard
+            lang={lang}
             files={files}
             progress={progress}
           />
@@ -509,6 +592,7 @@ export default function App() {
         <div className="lg:col-span-7 space-y-6">
           {/* Main Playback console card */}
           <AudioPlayer
+            lang={lang}
             currentFile={currentFile}
             isPlaying={isPlaying}
             setIsPlaying={setIsPlaying}
@@ -523,6 +607,7 @@ export default function App() {
 
           {/* Dedicated Manual & Automatic Matcher consoles */}
           <LabelingConsole
+            lang={lang}
             currentFile={currentFile}
             isPlaying={isPlaying}
             onSaveLabel={handleSaveLabel}

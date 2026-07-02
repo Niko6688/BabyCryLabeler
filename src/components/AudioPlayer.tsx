@@ -7,8 +7,10 @@ import React, { useRef, useState, useEffect } from 'react';
 import { Play, Pause, SkipForward, Square, RotateCcw, Volume2, Sparkles, Infinity as InfinityIcon } from 'lucide-react';
 import { AudioFile } from '../types';
 import { getLocalFileUrl } from '../lib/localFilesRegistry';
+import { Language, getTranslations } from '../lib/i18n';
 
 interface AudioPlayerProps {
+  lang: Language;
   currentFile: AudioFile | null;
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
@@ -22,6 +24,7 @@ interface AudioPlayerProps {
 }
 
 export default function AudioPlayer({
+  lang,
   currentFile,
   isPlaying,
   setIsPlaying,
@@ -33,6 +36,7 @@ export default function AudioPlayer({
   skipWaitAfterLastTrack,
   setSkipWaitAfterLastTrack
 }: AudioPlayerProps) {
+  const t = getTranslations(lang);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Waveform visualization states
@@ -204,7 +208,18 @@ export default function AudioPlayer({
   // Monitor playback details
   const handleTimeUpdate = () => {
     if (!audioRef.current) return;
-    setCurrentTime(audioRef.current.currentTime);
+    const current = audioRef.current.currentTime;
+    setCurrentTime(current);
+
+    // Safety fallback: retrieve valid duration if current state is uninitialized
+    if ((duration === 0 || isNaN(duration)) && audioRef.current.duration && !isNaN(audioRef.current.duration) && audioRef.current.duration > 0) {
+      const fileDuration = audioRef.current.duration;
+      setDuration(fileDuration);
+
+      const minRequiredDuration = 30;
+      const needed = Math.ceil(minRequiredDuration / fileDuration);
+      setLoopsNeeded(needed > 0 ? needed : 1);
+    }
   };
 
   // Handle local track audio loop cycles
@@ -239,6 +254,20 @@ export default function AudioPlayer({
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  // Format seconds to custom duration (m:ss or milliseconds)
+  const formatDuration = (seconds: number): string => {
+    if (seconds === 0) {
+      return duration < 1 ? '0ms' : '0:00';
+    }
+    if (!seconds || isNaN(seconds)) return '--';
+    if (seconds < 1) {
+      return `${(seconds * 1000).toFixed(0)}ms`;
+    }
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
   // Calculate percentage of track play
   const playProgress = duration > 0 ? (currentTime / duration) * 100 : 0;
   // Calculate total integrated progress across loops
@@ -267,6 +296,8 @@ export default function AudioPlayer({
       <audio
         ref={audioRef}
         onLoadedMetadata={handleLoadedMetadata}
+        onDurationChange={handleLoadedMetadata}
+        onCanPlay={handleLoadedMetadata}
         onTimeUpdate={handleTimeUpdate}
         onEnded={handleAudioEnded}
       />
@@ -275,21 +306,21 @@ export default function AudioPlayer({
       <div className="relative space-y-5">
         <div className="flex justify-between items-start">
           <div className="space-y-1">
-            <span className="text-[10px] text-indigo-400 bg-indigo-500/15 border border-indigo-500/20 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider">
-              2. 音频控制台
+            <span className="text-[10px] text-indigo-400 bg-indigo-500/15 border border-indigo-500/20 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider animate-pulse">
+              {lang === 'zh' ? '2. 音频控制台' : '2. Audio Control Console'}
             </span>
             <h3 className="font-bold text-lg text-slate-100 tracking-tight line-clamp-1">
-              {currentFile ? currentFile.name : '等待扫描并开始播放'}
+              {currentFile ? currentFile.name : (lang === 'zh' ? '等待扫描并开始播放' : 'Awaiting Scan to Start Playback')}
             </h3>
             <p className="text-xs text-slate-400 font-mono select-all line-clamp-1">
-              {currentFile ? currentFile.path : '请先在上方进行目录扫描...'}
+              {currentFile ? currentFile.path : (lang === 'zh' ? '请先在上方进行目录扫描...' : 'Please specify and scan a directory first...')}
             </p>
           </div>
 
           {/* Skip waiting toggle */}
           <div className="flex items-center space-x-2 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg p-2 shrink-0">
             <label className="text-[11px] text-slate-300 font-medium cursor-pointer" htmlFor="skip-wait-cb">
-              最后一首播完不等待
+              {t.skipWaitText}
             </label>
             <input
               id="skip-wait-cb"
@@ -301,34 +332,73 @@ export default function AudioPlayer({
           </div>
         </div>
 
+        {/* 当前播放状态栏 (Current Playback Status Bar) */}
+        <div className="bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs font-mono">
+          <div className="flex items-center space-x-2.5 truncate">
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+              isWaitingInterval 
+                ? 'bg-amber-400 animate-pulse' 
+                : isPlaying 
+                  ? 'bg-emerald-400 animate-ping' 
+                  : 'bg-rose-400'
+            }`} />
+            <span className="text-slate-400 shrink-0 font-bold">{t.currentPlay}:</span>
+            <span className="text-slate-200 font-medium truncate select-all" title={currentFile ? currentFile.name : (lang === 'zh' ? '无' : 'None')}>
+              {currentFile ? currentFile.name : '—'}
+            </span>
+          </div>
+          
+          <div className="flex items-center space-x-4 shrink-0 justify-between sm:justify-end">
+            <div className="flex items-center space-x-1.5">
+              <span className="text-slate-400 font-bold">{t.loopProgress}:</span>
+              <span className="text-indigo-400 font-extrabold bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded">
+                {currentFile ? (lang === 'zh' ? `第 ${currentLoop}/${loopsNeeded} 次` : `${currentLoop}/${loopsNeeded}x`) : '—'}(≥30s)
+              </span>
+            </div>
+            
+            <div className="flex items-center space-x-1.5">
+              <span className="text-slate-400 font-bold">{t.status}:</span>
+              <span className={`font-extrabold px-2.5 py-0.5 rounded ${
+                isWaitingInterval
+                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                  : isPlaying
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+              }`}>
+                {isWaitingInterval ? t.waiting : isPlaying ? t.playing : t.paused}
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* Playback Stats Dashboard */}
         {currentFile && !isWaitingInterval && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-800/40 p-4 rounded-xl border border-slate-800/80">
             <div className="space-y-1">
-              <span className="text-[10px] text-slate-400 block">单曲时长</span>
+              <span className="text-[10px] text-slate-400 block">{lang === 'zh' ? '单曲时长' : 'Track Duration'}</span>
               <span className="text-sm font-semibold text-slate-200 font-mono">
-                {formatTime(duration)}
+                {formatDuration(duration)}
               </span>
             </div>
             <div className="space-y-1">
-              <span className="text-[10px] text-slate-400 block">所需循环次数</span>
+              <span className="text-[10px] text-slate-400 block">{lang === 'zh' ? '所需循环次数' : 'Loops Required'}</span>
               <span className="text-sm font-semibold text-indigo-400 flex items-center gap-1">
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span className="font-mono">{loopsNeeded} 次</span>
-                <span className="text-[10px] text-slate-500">(时长 &lt; 30s 自动)</span>
+                <span className="font-mono">{loopsNeeded} {lang === 'zh' ? '次' : 'times'}</span>
+                <span className="text-[10px] text-slate-500">{lang === 'zh' ? '(时长 < 30s 自动)' : '(Auto if < 30s)'}</span>
               </span>
             </div>
             <div className="space-y-1">
-              <span className="text-[10px] text-slate-400 block">当前播放循环</span>
+              <span className="text-[10px] text-slate-400 block">{lang === 'zh' ? '当前播放循环' : 'Current Loop'}</span>
               <span className="text-sm font-semibold text-emerald-400 font-mono">
-                第 {currentLoop} / {loopsNeeded} 轮
+                {lang === 'zh' ? `第 ${currentLoop} / ${loopsNeeded} 轮` : `Loop ${currentLoop} / ${loopsNeeded}`}
               </span>
             </div>
             <div className="space-y-1">
-              <span className="text-[10px] text-slate-400 block">累计播放时长</span>
+              <span className="text-[10px] text-slate-400 block">{lang === 'zh' ? '累计播放时长' : 'Accumulated Playtime'}</span>
               <span className="text-sm font-semibold text-amber-400 font-mono">
                 {Math.floor(currentTime + accumulatedPlayTime)}s
-                <span className="text-xs text-slate-500 font-normal"> / 最少30s</span>
+                <span className="text-xs text-slate-500 font-normal">{lang === 'zh' ? ' / 最少30s' : ' / Min 30s'}</span>
               </span>
             </div>
           </div>
@@ -339,16 +409,16 @@ export default function AudioPlayer({
           <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-6 text-center space-y-3 relative overflow-hidden animate-pulse">
             <div className="absolute inset-0 bg-linear-to-r from-amber-500/5 via-transparent to-amber-500/5 pointer-events-none" />
             <span className="text-xs text-amber-400 uppercase tracking-widest font-semibold block">
-              两首音频随机间隔中 (用于分析与手机传输)
+              {lang === 'zh' ? '两首音频随机间隔中 (用于分析与手机传输)' : 'Random Interval Between Audios (Analysis & Transfer Gap)'}
             </span>
             <div className="flex items-baseline justify-center space-x-1">
               <span className="text-4xl font-extrabold text-amber-400 font-mono">
                 {waitingSecondsLeft}
               </span>
-              <span className="text-sm text-amber-500">秒</span>
+              <span className="text-sm text-amber-500">{lang === 'zh' ? '秒' : 's'}</span>
             </div>
             <p className="text-xs text-slate-400">
-              倒计时结束后，将自动载入队列中的下一首未标记音频
+              {lang === 'zh' ? '倒计时结束后，将自动载入队列中的下一首未标记音频' : 'Upon countdown completion, the next unlabeled audio in queue will auto-load'}
             </p>
           </div>
         ) : (
@@ -359,10 +429,10 @@ export default function AudioPlayer({
                 <div className="flex justify-between items-center text-xs text-slate-400 font-mono">
                   <span className="flex items-center gap-1.5 text-indigo-400">
                     <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-                    安全离线音频波形 (点击任意点跳转播放)
+                    {lang === 'zh' ? '安全离线音频波形 (点击任意点跳转播放)' : 'Safe Local Waveform (Click to jump playback)'}
                   </span>
                   <span className="bg-slate-800 px-2 py-0.5 rounded-md border border-slate-700 text-slate-300">
-                    {formatTime(currentTime)} / {formatTime(duration)}
+                    {formatDuration(currentTime)} / {formatDuration(duration)}
                   </span>
                 </div>
 
@@ -371,7 +441,7 @@ export default function AudioPlayer({
                   id="waveform-visual-container"
                   onClick={handleWaveformClick}
                   className="relative h-18 w-full bg-slate-950/50 hover:bg-slate-950/80 border border-slate-800/80 rounded-xl px-4 flex flex-col justify-center cursor-pointer select-none group transition-all duration-200 shadow-inner overflow-hidden"
-                  title="点击波形以调整播放进度"
+                  title={lang === 'zh' ? "点击波形以调整播放进度" : "Click waveform to seek"}
                 >
                   {/* Subtle Shimmer background effect during peak loading */}
                   {isLoadingPeaks && (
@@ -380,11 +450,11 @@ export default function AudioPlayer({
 
                   {/* Top hover indicator */}
                   <div className="absolute inset-x-4 top-1 flex justify-between items-center text-[9px] pointer-events-none">
-                    <span className="text-slate-600 font-mono">00:00</span>
+                    <span className="text-slate-600 font-mono">{duration < 1 ? '0ms' : '0:00'}</span>
                     <span className="opacity-0 group-hover:opacity-100 transition-opacity text-indigo-300 font-semibold tracking-wider uppercase text-[8px] bg-indigo-950/80 border border-indigo-800/40 px-1.5 py-0.5 rounded shadow-lg">
-                      🎛️ 点击这里快速跳转播放位置
+                      {lang === 'zh' ? '🎛️ 点击这里快速跳转播放位置' : '🎛️ Click to Jump Playback Position'}
                     </span>
-                    <span className="text-slate-600 font-mono">{formatTime(duration)}</span>
+                    <span className="text-slate-600 font-mono">{formatDuration(duration)}</span>
                   </div>
 
                   {/* Waveform Peak Bars Layout */}
@@ -439,7 +509,7 @@ export default function AudioPlayer({
             {currentFile && loopsNeeded > 1 && (
               <div className="space-y-1.5 bg-slate-950/20 p-2.5 rounded-lg border border-slate-800/40">
                 <div className="flex justify-between text-[11px] text-slate-400 font-mono">
-                  <span>累计达标时间最少 30 秒进度</span>
+                  <span>{lang === 'zh' ? '累计达标时间最少 30 秒进度' : 'Integrated 30s Target Progress'}</span>
                   <span className="text-emerald-400 font-semibold">
                     {Math.min(30, Math.floor(currentTotalPassed))}s / 30s
                   </span>
@@ -465,7 +535,7 @@ export default function AudioPlayer({
                 type="button"
                 onClick={() => setIsPlaying(false)}
                 className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold p-3 rounded-full transition-all shadow-md hover:scale-105"
-                title="暂停"
+                title={lang === 'zh' ? '暂停' : 'Pause'}
               >
                 <Pause className="w-5 h-5 fill-slate-950" />
               </button>
@@ -479,7 +549,7 @@ export default function AudioPlayer({
                 }}
                 disabled={!currentFile}
                 className="bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white font-bold p-3 rounded-full transition-all shadow-md hover:scale-105 disabled:pointer-events-none"
-                title="播放"
+                title={lang === 'zh' ? '播放' : 'Play'}
               >
                 <Play className="w-5 h-5 fill-current ml-0.5" />
               </button>
@@ -490,7 +560,7 @@ export default function AudioPlayer({
               onClick={onSkip}
               disabled={!currentFile}
               className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 p-2.5 rounded-lg transition-all disabled:opacity-50"
-              title="跳过当前并继续下一首"
+              title={lang === 'zh' ? '跳过当前并继续下一首' : 'Skip current track'}
             >
               <SkipForward className="w-4 h-4" />
             </button>
@@ -500,7 +570,7 @@ export default function AudioPlayer({
               onClick={onStop}
               disabled={!currentFile}
               className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-red-400 p-2.5 rounded-lg transition-all disabled:opacity-50"
-              title="暂停并停止播放状态"
+              title={lang === 'zh' ? '暂停并停止播放状态' : 'Stop and pause track'}
             >
               <Square className="w-4 h-4 fill-red-400/20" />
             </button>
