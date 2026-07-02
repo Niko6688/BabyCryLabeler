@@ -529,50 +529,63 @@ export default function AudioPlayer({
         <div className="flex flex-col md:flex-row justify-between items-center gap-4 pt-2 border-t border-slate-800/80">
           
           {/* Controls Box */}
-          <div className="flex items-center space-x-3 order-2 md:order-1">
-            {isPlaying ? (
-              <button
-                type="button"
-                onClick={() => setIsPlaying(false)}
-                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold p-3 rounded-full transition-all shadow-md hover:scale-105"
-                title={lang === 'zh' ? '暂停' : 'Pause'}
-              >
-                <Pause className="w-5 h-5 fill-slate-950" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  if (currentFile) {
-                    setIsPlaying(true);
-                  }
-                }}
-                disabled={!currentFile}
-                className="bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white font-bold p-3 rounded-full transition-all shadow-md hover:scale-105 disabled:pointer-events-none"
-                title={lang === 'zh' ? '播放' : 'Play'}
-              >
-                <Play className="w-5 h-5 fill-current ml-0.5" />
-              </button>
-            )}
-
+          <div className="flex flex-wrap items-center gap-2 order-2 md:order-1">
             <button
+              id="btn-play-start"
               type="button"
-              onClick={onSkip}
-              disabled={!currentFile}
-              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 p-2.5 rounded-lg transition-all disabled:opacity-50"
-              title={lang === 'zh' ? '跳过当前并继续下一首' : 'Skip current track'}
+              onClick={() => {
+                if (currentFile) {
+                  setIsPlaying(true);
+                }
+              }}
+              disabled={!currentFile || isPlaying}
+              className="px-3.5 py-1.5 rounded-md font-bold text-xs transition-all disabled:opacity-30 disabled:pointer-events-none cursor-pointer bg-indigo-600 hover:bg-indigo-500 text-white border border-transparent shadow-xs hover:scale-102 active:scale-98"
             >
-              <SkipForward className="w-4 h-4" />
+              {lang === 'zh' ? '开始' : 'Start'}
             </button>
 
             <button
+              id="btn-play-pause"
+              type="button"
+              onClick={() => setIsPlaying(false)}
+              disabled={!currentFile || !isPlaying}
+              className="px-3.5 py-1.5 rounded-md font-bold text-xs transition-all disabled:opacity-30 disabled:pointer-events-none cursor-pointer bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 shadow-xs hover:scale-102 active:scale-98"
+            >
+              {lang === 'zh' ? '暂停' : 'Pause'}
+            </button>
+
+            <button
+              id="btn-play-resume"
+              type="button"
+              onClick={() => {
+                if (currentFile) {
+                  setIsPlaying(true);
+                }
+              }}
+              disabled={!currentFile || isPlaying}
+              className="px-3.5 py-1.5 rounded-md font-bold text-xs transition-all disabled:opacity-30 disabled:pointer-events-none cursor-pointer bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 shadow-xs hover:scale-102 active:scale-98"
+            >
+              {lang === 'zh' ? '继续' : 'Resume'}
+            </button>
+
+            <button
+              id="btn-play-skip"
+              type="button"
+              onClick={onSkip}
+              disabled={!currentFile}
+              className="px-3.5 py-1.5 rounded-md font-bold text-xs transition-all disabled:opacity-30 disabled:pointer-events-none cursor-pointer bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 shadow-xs hover:scale-102 active:scale-98"
+            >
+              {lang === 'zh' ? '跳过当前' : 'Skip'}
+            </button>
+
+            <button
+              id="btn-play-stop"
               type="button"
               onClick={onStop}
               disabled={!currentFile}
-              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-red-400 p-2.5 rounded-lg transition-all disabled:opacity-50"
-              title={lang === 'zh' ? '暂停并停止播放状态' : 'Stop and pause track'}
+              className="px-3.5 py-1.5 rounded-md font-bold text-xs transition-all disabled:opacity-30 disabled:pointer-events-none cursor-pointer bg-transparent hover:bg-red-500/10 border border-red-500/30 hover:border-red-500/50 text-red-400 shadow-xs hover:scale-102 active:scale-98"
             >
-              <Square className="w-4 h-4 fill-red-400/20" />
+              {lang === 'zh' ? '停止重置' : 'Stop Reset'}
             </button>
           </div>
 

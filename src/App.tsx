@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Volume2, FileAudio, Check, AlertTriangle, Layers, Trophy, Cpu, LogOut, Languages } from 'lucide-react';
+import { Volume2, FileAudio, Check, AlertTriangle, Layers, Trophy, LogOut, Languages, Moon, Sun } from 'lucide-react';
 import { AudioFile, ProgressData, LabelMode, PlaybackMode } from './types';
 import SettingsPanel from './components/SettingsPanel';
 import AudioPlayer from './components/AudioPlayer';
@@ -22,6 +22,15 @@ export default function App() {
     return (localStorage.getItem('app_lang') as Language) || 'zh';
   });
   const t = useMemo(() => getTranslations(lang), [lang]);
+
+  // Dark mode state
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    return localStorage.getItem('is_dark_mode') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('is_dark_mode', isDarkMode ? 'true' : 'false');
+  }, [isDarkMode]);
 
   // Scanned lists
   const [files, setFiles] = useState<AudioFile[]>([]);
@@ -494,6 +503,33 @@ export default function App() {
     }
   };
 
+  const handleSaveLabelForPath = async (filePath: string, labelString: string) => {
+    const targetFile = files.find(f => f.path === filePath);
+    if (!targetFile) return;
+
+    try {
+      const res = await fetch('/api/save-label', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filePath: targetFile.path,
+          label: labelString,
+          fileName: targetFile.name,
+          relativePath: targetFile.relativePath,
+          absolutePath: targetFile.absolutePath || null
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBackendProgress(data.progress);
+      } else {
+        console.error("Save label for path failed");
+      }
+    } catch (err) {
+      console.error("Error saving label for path", err);
+    }
+  };
+
   // Skip manually trigger
   const handleSkipTrack = () => {
     setIsWaitingInterval(false);
@@ -513,7 +549,12 @@ export default function App() {
   const unlabeledCount = Math.max(0, totalFiles - loadedLabeledCount);
 
   return (
-    <div id="app-root-layout" className="min-h-screen bg-slate-50 flex flex-col antialiased">
+    <div
+      id="app-root-layout"
+      className={`min-h-screen flex flex-col antialiased ${
+        isDarkMode ? 'dark bg-[#0f0f1a] text-[#e0e0e0]' : 'bg-slate-50 text-slate-700'
+      }`}
+    >
       {/* Premium Header Menu Nav */}
       <header className="sticky top-0 z-50 bg-white border-b border-slate-200/80 shadow-3xs px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
@@ -533,6 +574,22 @@ export default function App() {
         {/* Status badges */}
         <div className="flex items-center gap-3">
           <button
+            id="theme-switcher-btn"
+            onClick={() => setIsDarkMode(prev => !prev)}
+            className={`flex items-center space-x-1.5 font-bold px-3 py-1.5 rounded-full text-xs cursor-pointer transition-all duration-300 border ${
+              isDarkMode
+                ? 'bg-[#1a1a24] border-[#2a2a38] text-white hover:text-indigo-300'
+                : 'bg-slate-100/80 hover:bg-slate-200 border-slate-200 text-slate-700'
+            }`}
+          >
+            <span>
+              {isDarkMode 
+                ? (lang === 'zh' ? '☀️ 日间模式' : '☀️ Day Mode') 
+                : (lang === 'zh' ? '🌙 夜间模式' : '🌙 Night Mode')}
+            </span>
+          </button>
+
+          <button
             id="lang-switcher-btn"
             onClick={() => setLang(prev => prev === 'zh' ? 'en' : 'zh')}
             className="flex items-center space-x-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold px-3 py-1.5 rounded-full text-xs transition-colors cursor-pointer"
@@ -540,11 +597,6 @@ export default function App() {
             <Languages className="w-3.5 h-3.5 text-indigo-500" />
             <span>{lang === 'zh' ? 'English' : '中文'}</span>
           </button>
-
-          <div className="flex items-center space-x-1.5 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200 text-xs">
-            <Cpu className="w-3.5 h-3.5 text-indigo-500" />
-            <span className="text-slate-600 font-mono font-bold">{t.localEnv}</span>
-          </div>
         </div>
       </header>
 
@@ -579,6 +631,7 @@ export default function App() {
             playbackMode={playbackMode}
             setPlaybackMode={setPlaybackMode}
             onClearFiles={handleClearLoadedAudios}
+            onSaveLabelForPath={handleSaveLabelForPath}
           />
 
           <StatisticsDashboard

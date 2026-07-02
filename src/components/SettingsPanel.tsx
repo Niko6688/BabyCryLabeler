@@ -60,7 +60,7 @@ export default function SettingsPanel({
 
   const [localPath, setLocalPath] = useState(scannedPath || './demo_audios');
   const [localResultPath, setLocalResultPath] = useState(resultFilePath || './demo_audios/result.txt');
-  const [showHelp, setShowHelp] = useState(true); // Default show help to guide user
+  const [showHelp, setShowHelp] = useState(false); // Default help collapsed by default as requested
   const [activeTab, setActiveTab] = useState<'browser' | 'server'>('browser'); // Default browser to guide quick online preview
   const [isDragOver, setIsDragOver] = useState(false);
   const [isBrowserLoading, setIsBrowserLoading] = useState(false);
@@ -279,7 +279,7 @@ export default function SettingsPanel({
           <HelpCircle className="w-4 h-4" />
           {showHelp 
             ? (lang === 'zh' ? '收起说明' : 'Hide Help') 
-            : (lang === 'zh' ? '查看说明 / 手机识别' : 'View Help / Mobile Recognition')}
+            : (lang === 'zh' ? '展开说明' : 'Expand Help')}
         </button>
       </div>
 
@@ -306,20 +306,27 @@ export default function SettingsPanel({
 
           <div className="border-t border-indigo-100/80 pt-2 text-indigo-900/95">
             <p className="font-bold text-indigo-950">
-              {lang === 'zh' ? 'Q2: 为什么输入框里不能直接选自己的文件夹？' : 'Q2: Why can\'t I pick a physical path directly in the web browser?'}
+              {lang === 'zh' ? 'Q2: 为什么我的文件夹路径输入后扫描不到文件？' : 'Q2: Why are files not found after entering my folder path?'}
             </p>
             <p className="ml-5 mt-1">
-              <strong>{lang === 'zh' ? '沙盒运行机制保障：' : 'Sandbox Protection Security: '}</strong>
               {lang === 'zh' ? (
-                <>您当前在 Google AI Studio 的 **网页云端预览环境**，出于浏览器的安全边界沙箱设计，云端服务器是<strong>无法访问您个人电脑的物理 C盘/D盘 或 macOS 文件夹的</strong>！
-                <br /><strong>两步解决使用限制：</strong>
-                <br />1. <strong>极速云端体验（直接上传）：</strong>请直接在下方切换到 <code>[选择自己的文件直接加载]</code> 标签页，<strong>点选或拖入电脑上的任意音频</strong>即可在网页中直接试听和标注！
-                <br />2. <strong>本地执行（递归扫描目录）：</strong>您可以导出项目代码，在本地终端运行 <code>npm start</code>，打开 <code>http://localhost:3000</code>，Node 就会完美读取任意本机路径了！</>
+                <>请确认以下几点：
+                <br />• <strong>填写的是完整的绝对路径：</strong>
+                <br />&nbsp;&nbsp;（Mac 示例：<code>/Users/您的用户名/Music/baby</code>）
+                <br />&nbsp;&nbsp;（Windows 示例：<code>C:\Users\您的用户名\Music\baby</code>）
+                <br />• <strong>路径中不含中文或特殊字符：</strong>确保整个文件夹名称路径全部为英文字符或数字
+                <br />• <strong>文件夹内有支持的音频格式：</strong>支持的文件后缀包括 <code>.mp3 .wav .m4a .ogg .flac .aac</code>
+                <br /><br />
+                如果依然无法使用路径扫描，可切换到下方<strong>「直接选/拖入自己的音频」</strong>标签页，直接拖入或点选电脑上的音频文件即可。</>
               ) : (
-                <>You are currently in the **web preview sandbox**. Browsers strictly prohibit remote websites from directly accessing physical files on your hard drive (C:\\, D:\\, or macOS folders)!
-                <br /><strong>Two ways to run your files:</strong>
-                <br />1. <strong>Direct Upload (Recommended for Web):</strong> Switch to the <code>🌐 Direct Upload</code> tab below, <strong>click or drag & drop files/folders</strong> to play and label in your browser instantly!
-                <br />2. <strong>Local Deployment:</strong> Export this project as ZIP, run <code>npm start</code> on your local terminal, navigate to <code>http://localhost:3000</code>, and Node.js will read any absolute paths on your machine natively!</>
+                <>Please confirm the following:
+                <br />• <strong>Ensure you have entered a complete absolute path:</strong>
+                <br />&nbsp;&nbsp;(Mac example: <code>/Users/yourusername/Music/baby</code>)
+                <br />&nbsp;&nbsp;(Windows example: <code>C:\Users\yourusername\Music\baby</code>)
+                <br />• <strong>Ensure the path contains no special or native characters:</strong> Check that directory names are in English/alphanumeric characters.
+                <br />• <strong>Ensure the folder contains supported audio formats:</strong> Files must be formatted as <code>.mp3 .wav .m4a .ogg .flac .aac</code>
+                <br /><br />
+                If path scanning cannot be used, you can easily switch to the <strong>"Direct Upload / Drop Audios"</strong> tab below, and drag & drop or select the audio files directly from your computer.</>
               )}
             </p>
           </div>

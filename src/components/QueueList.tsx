@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { PlayCircle, CheckCircle2, RotateCcw, Award, Music, Shuffle, AlignLeft, Layers, Volume, Trash2 } from 'lucide-react';
-import { AudioFile, ProgressData } from '../types';
+import { AudioFile, ProgressData, LABELS } from '../types';
 import { getLocalFileUrl } from '../lib/localFilesRegistry';
 import { Language, getTranslations } from '../lib/i18n';
 
@@ -18,6 +18,7 @@ interface QueueListProps {
   playbackMode: 'order' | 'random';
   setPlaybackMode: (mode: 'order' | 'random') => void;
   onClearFiles?: () => void;
+  onSaveLabelForPath?: (filePath: string, label: string) => void;
 }
 
 export default function QueueList({
@@ -28,7 +29,8 @@ export default function QueueList({
   onSelectTrack,
   playbackMode,
   setPlaybackMode,
-  onClearFiles
+  onClearFiles,
+  onSaveLabelForPath
 }: QueueListProps) {
   const t = getTranslations(lang);
   const [searchTerm, setSearchTerm] = useState('');
@@ -411,12 +413,43 @@ export default function QueueList({
                           {durationStr} ×{loopsNeeded}
                         </span>
                       </div>
+
+                      {/* 5 inline classification label buttons under filename as in the screenshot */}
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {Object.entries(LABELS).map(([labelKey, details]) => {
+                          const isSelected = savedLabel === details.label;
+                          return (
+                            <button
+                              key={labelKey}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onSaveLabelForPath) {
+                                  onSaveLabelForPath(file.path, details.label);
+                                }
+                              }}
+                              className={`tag-btn px-2 py-0.5 rounded-full text-[9px] font-bold border transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'bg-[#1a6655] border-[#1a6655] text-white selected-tag'
+                                  : 'bg-slate-100/80 border-slate-200 text-slate-500 hover:bg-slate-200'
+                              }`}
+                            >
+                              {lang === 'zh' ? details.label : (
+                                details.label === '饥饿' ? t.hungry :
+                                details.label === '不舒服' ? t.uncomfortable :
+                                details.label === '犯困' ? t.sleepy :
+                                details.label === '需要拍嗝' ? t.burp : t.agitated
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
 
                   {/* Right side aligned information: Play counts, tags, and times */}
                   <div className="flex flex-col items-end justify-between text-right shrink-0 space-y-1 min-w-[120px]">
-                    <span className="text-[10px] font-mono font-semibold text-slate-500">
+                    <span className={`text-[10px] font-mono font-semibold ${hasPlayed ? 'played-count-text text-orange-600' : 'text-slate-500'}`}>
                       {hasPlayed 
                         ? (lang === 'zh' ? `已播 ${playCount} 次` : `Played ${playCount}x`) 
                         : (lang === 'zh' ? '未播放' : 'Unplayed')}
@@ -435,7 +468,7 @@ export default function QueueList({
                     </div>
 
                     {fileProgress?.lastPlayedAt && (
-                      <span className="text-[9px] font-mono text-slate-400">
+                      <span className="text-[9px] font-mono text-slate-400 timestamp-text">
                         {formatLocalDate(fileProgress.lastPlayedAt)}
                       </span>
                     )}

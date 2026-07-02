@@ -501,7 +501,7 @@ export default function LabelingConsole({
                 {clipboardStatus === 'active' && <span className="text-emerald-600">{lang === 'zh' ? '● 1.5s轮询检测中' : '● 1.5s Polling active'}</span>}
                 {clipboardStatus === 'waiting_focus' && <span className="text-amber-500 animate-pulse font-semibold">{lang === 'zh' ? '● 运行中 (请点击页面聚焦)' : '● Polling (Please click page to focus)'}</span>}
                 {clipboardStatus === 'inactive' && <span className="text-slate-500">{lang === 'zh' ? '○ 已停用' : '○ Deactivated'}</span>}
-                {clipboardStatus === 'blocked' && <span className="text-red-500 font-semibold">{lang === 'zh' ? '⚠️ 浏览器策略或沙盒限制' : '⚠️ Sandbox frame limits'}</span>}
+                {clipboardStatus === 'blocked' && <span className="text-red-500 font-semibold">{lang === 'zh' ? '⚠️ 浏览器策略限制' : '⚠️ Browser permissions restricted'}</span>}
               </span>
             </div>
 
@@ -511,11 +511,11 @@ export default function LabelingConsole({
                 <p>
                   {clipboardStatus === 'waiting_focus' 
                     ? (lang === 'zh' 
-                        ? '提示: 当您切换至 scrcpy 或其他应用程序时，浏览器为了安全性会暂停剪贴板监控。请轻点一下此网页，即可瞬间重新激活高频轮询！'
-                        : 'Tip: Browser pauses clipboard monitoring when you focus scrcpy or other apps. Click anywhere on this page to reactivate polling!')
+                        ? '提示: 当您切换至其他应用程序时，浏览器为了安全性会暂停剪贴板监控。请轻点一下此网页，即可重新激活监控轮询！'
+                        : 'Tip: Browsers pause clipboard monitoring when you focus other apps. Click anywhere on this page to reactivate polling!')
                     : (lang === 'zh'
-                        ? '由于 AI Studio 沙盒预览环境存在跨域安全保护，直接在 iframe 内访问系统剪贴板可能被拦截。可点击下方手动粘贴，或者点击右上角“新建标签页打开”获得完整读取权限。'
-                        : 'Since AI Studio preview runs inside an iframe, direct system clipboard queries might be blocked. Paste manually below, or choose "Open in new tab" from the top-right.')
+                        ? '由于浏览器安全机制限制，直接自动访问系统剪贴板可能被拦截。可点击下方手动粘贴，或者确保在独立的浏览器窗口中打开以获得完整剪贴板读取权限。'
+                        : 'Since browser security policies may restrict direct clipboard queries, you can paste manually below, or ensure the page is running in a standard browser tab.')
                   }
                 </p>
               </div>
