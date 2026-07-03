@@ -37,10 +37,11 @@ async function startServer() {
 
   // Middleware for parsing JSON and URL encoded bodies
   app.use((req, res, next) => {
-    const isFiltered = req.url === '/api/update-playback-status' || 
-                       req.url === '/api/get-playback-status' || 
-                       req.url === '/api/progress' ||
-                       req.url === '/api/scan';
+    const isFiltered = req.url.startsWith('/api/update-playback-status') || 
+                       req.url.startsWith('/api/get-playback-status') || 
+                       req.url.startsWith('/api/progress') ||
+                       req.url.startsWith('/api/scan') ||
+                       req.url.startsWith('/api/record-play');
     if (!isFiltered) {
       console.log(`[Express] Incoming Request: ${req.method} ${req.url}`);
     }

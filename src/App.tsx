@@ -301,6 +301,7 @@ export default function App() {
       if (res.ok) {
         // 1. Reset all React state variables
         setBackendProgress({});
+        console.trace("[ResetTrace] setFiles([]) triggered inside handleResetAll (session reset).");
         setFiles([]);
         setCurrentFile(null);
         setIsPlaying(false);
@@ -353,6 +354,7 @@ export default function App() {
   };
 
   const handleClearLoadedAudios = () => {
+    console.trace("[ResetTrace] setFiles([]) triggered inside handleClearLoadedAudios (clear queue button).");
     clearAllLocalFiles();
     setFiles([]);
     setCurrentFile(null);

@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { PlayCircle, CheckCircle2, RotateCcw, Award, Music, Shuffle, AlignLeft, Layers, Volume, Trash2 } from 'lucide-react';
 import { AudioFile, ProgressData, LABELS } from '../types';
-import { getLocalFileUrl } from '../lib/localFilesRegistry';
+import { createTempLocalFileUrl } from '../lib/localFilesRegistry';
 import { Language, getTranslations } from '../lib/i18n';
 
 interface QueueListProps {
@@ -119,13 +119,16 @@ export default function QueueList({
   // Dynamic preloading of metadata for visible files
   useEffect(() => {
     const activeAudios: HTMLAudioElement[] = [];
+    const urlsToRevoke: string[] = [];
 
     paginatedFiles.forEach(file => {
       if (cachedDurations[file.path] !== undefined) return;
 
       let streamUrl = file.path;
+      let isTempUrl = false;
       if (file.path.startsWith('local-file://')) {
-        streamUrl = getLocalFileUrl(file.path);
+        streamUrl = createTempLocalFileUrl(file.path);
+        isTempUrl = streamUrl.startsWith('blob:');
       } else if (!file.path.startsWith('blob:')) {
         streamUrl = `/api/stream?filePath=${encodeURIComponent(file.path)}`;
       }
@@ -133,6 +136,16 @@ export default function QueueList({
       const audio = new Audio();
       audio.src = streamUrl;
       audio.preload = "metadata";
+
+      const cleanupTempUrl = () => {
+        if (isTempUrl && streamUrl.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(streamUrl);
+          } catch (e) {
+            // ignore
+          }
+        }
+      };
 
       const handleLoaded = () => {
         const d = audio.duration;
@@ -142,6 +155,7 @@ export default function QueueList({
             [file.path]: d
           }));
         }
+        cleanupTempUrl();
       };
 
       const handleError = () => {
@@ -149,6 +163,7 @@ export default function QueueList({
           ...prev,
           [file.path]: 30 // fallback
         }));
+        cleanupTempUrl();
       };
 
       audio.addEventListener('loadedmetadata', handleLoaded);
@@ -156,12 +171,23 @@ export default function QueueList({
       audio.load();
 
       activeAudios.push(audio);
+      if (isTempUrl) {
+        urlsToRevoke.push(streamUrl);
+      }
     });
 
     return () => {
       activeAudios.forEach(audio => {
         audio.src = '';
         audio.load();
+      });
+      // Cleanup any remaining temporary URLs just in case
+      urlsToRevoke.forEach(url => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (e) {
+          // ignore
+        }
       });
     };
   }, [paginatedFiles]);

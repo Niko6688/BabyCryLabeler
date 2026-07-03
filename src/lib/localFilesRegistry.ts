@@ -10,6 +10,7 @@
 import { AudioFile } from '../types';
 
 export const localFileMap = new Map<string, File>();
+let activePath: string | null = null;
 let activeObjectUrl: string | null = null;
 
 /**
@@ -51,6 +52,11 @@ export function registerLocalFiles(files: File[], isDragAndDrop: boolean = false
  */
 export function getLocalFileUrl(path: string): string {
   if (path.startsWith('local-file://')) {
+    // 如果请求的是当前已经生成的 URL，则直接重用，不进行销毁与重建
+    if (activePath === path && activeObjectUrl) {
+      return activeObjectUrl;
+    }
+
     if (activeObjectUrl) {
       try {
         URL.revokeObjectURL(activeObjectUrl);
@@ -59,10 +65,38 @@ export function getLocalFileUrl(path: string): string {
       }
       activeObjectUrl = null;
     }
+
     const file = localFileMap.get(path);
     if (file) {
-      activeObjectUrl = URL.createObjectURL(file);
+      let fileToUse: Blob | File = file;
+      const lowerName = file.name.toLowerCase();
+      // 强力校正拖拽上传 WAV 时的 MIME 格式，确保特殊采样率/位深的 WAV 在高版本浏览器下均能稳定高保真解码
+      if (lowerName.endsWith('.wav') || lowerName.endsWith('.wave')) {
+        fileToUse = new Blob([file], { type: 'audio/wav' });
+      }
+      activeObjectUrl = URL.createObjectURL(fileToUse);
+      activePath = path;
       return activeObjectUrl;
+    }
+  }
+  return path;
+}
+
+/**
+ * 为预加载等临时用途创建 Blob URL，不占用播放器的 activeObjectUrl 通道。
+ * 调用者必须负责在用完后手动或在事件回调中调用 revoke
+ */
+export function createTempLocalFileUrl(path: string): string {
+  if (path.startsWith('local-file://')) {
+    const file = localFileMap.get(path);
+    if (file) {
+      let fileToUse: Blob | File = file;
+      const lowerName = file.name.toLowerCase();
+      // 强力校正拖拽上传 WAV 时的 MIME 格式，确保特殊采样率/位深的 WAV 在高版本浏览器下均能稳定高保真解码
+      if (lowerName.endsWith('.wav') || lowerName.endsWith('.wave')) {
+        fileToUse = new Blob([file], { type: 'audio/wav' });
+      }
+      return URL.createObjectURL(fileToUse);
     }
   }
   return path;
@@ -80,5 +114,6 @@ export function clearAllLocalFiles() {
     }
     activeObjectUrl = null;
   }
+  activePath = null;
   localFileMap.clear();
 }
