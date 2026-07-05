@@ -126,12 +126,12 @@ export default function App() {
 
   // Timers
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isScanningRef = useRef(false);
 
   // Load progress.json on app creation
   useEffect(() => {
     fetchProgress();
-    // Pre-scan default path on cold starts to make it instantly functional
-    handleScan(scannedPath, true);
+    // Do not pre-scan on startup for local deployment as requested
   }, []);
 
   // Save configurations locally to persist user input patterns
@@ -397,6 +397,8 @@ export default function App() {
 
   // Trigger scan API over scannedPath
   const handleScan = async (pathString: string, isInitial: boolean = false) => {
+    if (isScanningRef.current) return;
+    isScanningRef.current = true;
     setIsScanning(true);
     let res: Response | null = null;
     try {
@@ -412,12 +414,11 @@ export default function App() {
             ...f,
             absolutePath: f.absolutePath || f.path
           }));
-          const existingKeys = new Set(
-            files.map(f => f.absolutePath || `[uploaded]${f.name}`)
-          );
+
+          const existingKeys = new Set(files.map(f => f.absolutePath || f.path));
 
           const newFiles = incomingFiles.filter(f => {
-            const key = f.absolutePath || `[uploaded]${f.name}`;
+            const key = f.absolutePath || f.path;
             return !existingKeys.has(key);
           });
 
@@ -430,7 +431,16 @@ export default function App() {
           }
 
           if (newFiles.length > 0) {
-            setFiles(prev => [...prev, ...newFiles]);
+            setFiles(prev => {
+              const combined = [...prev, ...newFiles];
+              const seen = new Set<string>();
+              return combined.filter(f => {
+                const key = f.absolutePath || f.path;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              });
+            });
             
             if (!currentFile) {
               const unlabeled = newFiles.find((f: AudioFile) => !isAudioFileLabeled(f));
@@ -467,6 +477,7 @@ export default function App() {
         } catch (_) {}
       }
     } finally {
+      isScanningRef.current = false;
       setIsScanning(false);
     }
   };
@@ -549,17 +560,24 @@ export default function App() {
     const fileArray = Array.isArray(uploadedFileList) ? uploadedFileList : Array.from(uploadedFileList);
     const list = registerLocalFiles(fileArray, isDragAndDrop);
     if (list.length > 0) {
-      const existingKeys = new Set(
-        files.map(f => f.absolutePath || `[uploaded]${f.name}`)
-      );
+      const existingKeys = new Set(files.map(f => f.absolutePath || f.path));
 
       const newFiles = list.filter(f => {
-        const key = f.absolutePath || `[uploaded]${f.name}`;
+        const key = f.absolutePath || f.path;
         return !existingKeys.has(key);
       });
 
       if (newFiles.length > 0) {
-        setFiles(prev => [...prev, ...newFiles]);
+        setFiles(prev => {
+          const combined = [...prev, ...newFiles];
+          const seen = new Set<string>();
+          return combined.filter(f => {
+            const key = f.absolutePath || f.path;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        });
         if (!currentFile) {
           setCurrentFile(newFiles[0]);
         }
