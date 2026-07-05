@@ -57,11 +57,43 @@ export default function LabelingConsole({
   const clipboardTimerRef = useRef<NodeJS.Timeout | null>(null);
   const fileTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Sync references to latest states/callbacks to decouple interval timers from reactive state changes
+  const isPlayingRef = useRef(isPlaying);
+  const isWaitingIntervalRef = useRef(isWaitingInterval);
+  const currentFileRef = useRef(currentFile);
+  const onSaveLabelRef = useRef(onSaveLabel);
+  const onSkipRef = useRef(onSkip);
+  const clipboardContentRef = useRef(clipboardContent);
+  const fileContentRef = useRef(fileContent);
+  const resultFilePathRef = useRef(resultFilePath);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+    isWaitingIntervalRef.current = isWaitingInterval;
+    currentFileRef.current = currentFile;
+    onSaveLabelRef.current = onSaveLabel;
+    onSkipRef.current = onSkip;
+    clipboardContentRef.current = clipboardContent;
+    fileContentRef.current = fileContent;
+    resultFilePathRef.current = resultFilePath;
+  }, [isPlaying, isWaitingInterval, currentFile, onSaveLabel, onSkip, clipboardContent, fileContent, resultFilePath]);
+
   // Helper inside helper: Write log entries
   const addLog = (text: string, type: 'info' | 'success' | 'warn' = 'info') => {
     const now = new Date().toTimeString().split(' ')[0];
     setLogs(prev => [{ time: now, text, type }, ...prev.slice(0, 24)]);
   };
+
+  // Listen to periodic cleanup event to clear logs cache
+  useEffect(() => {
+    const handleClearCaches = () => {
+      setLogs([]);
+    };
+    window.addEventListener('clear-app-caches', handleClearCaches);
+    return () => {
+      window.removeEventListener('clear-app-caches', handleClearCaches);
+    };
+  }, []);
 
   // Keyboard shortcut listener for MANUAL mode
   useEffect(() => {
@@ -153,17 +185,18 @@ export default function LabelingConsole({
   };
 
   // --- MODE 1.5: Direct Local Helper Mode (No focus required, automatic background syncer) ---
-  const checkDirectHelper = async () => {
+  const pollDirectSync = async () => {
+    if (!currentFileRef.current) return;
+    let response: Response | null = null;
     try {
-      const response = await fetch('http://127.0.0.1:3124/sync', {
+      response = await fetch('http://127.0.0.1:3124/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          isPlaying,
-          isWaitingInterval,
-          currentFile
+          isPlaying: isPlayingRef.current,
+          isWaitingInterval: isWaitingIntervalRef.current,
+          currentFile: currentFileRef.current
         }),
-        // Avoid sending credentials to localhost
         credentials: 'omit'
       });
       if (response.ok) {
@@ -173,38 +206,143 @@ export default function LabelingConsole({
           setDirectStatus("connected");
           if (data.label) {
             addLog(`从[本地直连助手]自动匹配成功 ➔ "${data.label}"`, 'success');
-            onSaveLabel(data.label);
+            onSaveLabelRef.current(data.label);
           } else if (data.skip) {
             addLog(`从[本地直连助手]接收到跳过音轨指令`, 'warn');
-            if (onSkip) onSkip();
+            if (onSkipRef.current) onSkipRef.current();
           }
         } else {
+          if (response.body) {
+            await response.body.cancel();
+          }
           setDirectStatus("connected");
         }
       } else {
+        if (response.body) {
+          try {
+            await response.body.cancel();
+          } catch (_) {}
+        }
         setDirectStatus("error");
+        addLog("与本地助手的连接已断开，已停止自动重连。请检查脚本，并点击[手动连接]重试。", 'warn');
+        if (directTimerRef.current) {
+          clearInterval(directTimerRef.current);
+          directTimerRef.current = null;
+        }
       }
     } catch (err) {
+      if (response && response.body) {
+        try {
+          await response.body.cancel();
+        } catch (_) {}
+      }
       setDirectStatus("error");
+      addLog("与本地助手的连接已断开，已停止自动重连。请检查脚本，并点击[手动连接]重试。", 'warn');
+      if (directTimerRef.current) {
+        clearInterval(directTimerRef.current);
+        directTimerRef.current = null;
+      }
+    }
+  };
+
+  const tryConnectDirect = async (isManual = false) => {
+    if (!currentFileRef.current) return;
+    if (isManual) {
+      addLog("正在尝试连接本地智能助手...", 'info');
+    }
+    let response: Response | null = null;
+    try {
+      response = await fetch('http://127.0.0.1:3124/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          isPlaying: isPlayingRef.current,
+          isWaitingInterval: isWaitingIntervalRef.current,
+          currentFile: currentFileRef.current
+        }),
+        credentials: 'omit'
+      });
+      if (response.ok) {
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+          setDirectStatus("connected");
+          addLog("成功连接到本地助手！自动同步已激活。", 'success');
+          if (data.label) {
+            addLog(`从[本地直连助手]自动匹配成功 ➔ "${data.label}"`, 'success');
+            onSaveLabelRef.current(data.label);
+          } else if (data.skip) {
+            addLog(`从[本地直连助手]接收到跳过音轨指令`, 'warn');
+            if (onSkipRef.current) onSkipRef.current();
+          }
+        } else {
+          if (response.body) {
+            await response.body.cancel();
+          }
+          setDirectStatus("connected");
+          addLog("成功连接到本地助手！自动同步已激活。", 'success');
+        }
+
+        // Start polling now that it succeeded
+        if (directTimerRef.current) {
+          clearInterval(directTimerRef.current);
+        }
+        directTimerRef.current = setInterval(pollDirectSync, 1500);
+      } else {
+        if (response.body) {
+          try {
+            await response.body.cancel();
+          } catch (_) {}
+        }
+        setDirectStatus("error");
+        if (isManual) {
+          addLog("手动连接本地助手失败，未检测到本地助手服务。请确认本地 baby_cry_ocr_helper.py 脚本已运行。", 'warn');
+        } else {
+          addLog("未检测到本地助手。已停止自动重连。请在本地开启 Python 助手脚本后，点击[手动连接]重试。", 'warn');
+        }
+        if (directTimerRef.current) {
+          clearInterval(directTimerRef.current);
+          directTimerRef.current = null;
+        }
+      }
+    } catch (err) {
+      if (response && response.body) {
+        try {
+          await response.body.cancel();
+        } catch (_) {}
+      }
+      setDirectStatus("error");
+      if (isManual) {
+        addLog("手动连接本地助手失败，未检测到本地助手服务。请确认本地 baby_cry_ocr_helper.py 脚本已运行。", 'warn');
+      } else {
+        addLog("未检测到本地助手。已停止自动重连。请在本地开启 Python 助手脚本后，点击[手动连接]重试。", 'warn');
+      }
+      if (directTimerRef.current) {
+        clearInterval(directTimerRef.current);
+        directTimerRef.current = null;
+      }
     }
   };
 
   useEffect(() => {
     if (labelMode === "direct" && currentFile) {
       addLog("已开启本地助手直连接收模式（推荐：高稳定/免聚焦/全自动）", 'info');
-      checkDirectHelper(); // Run once immediately
-      directTimerRef.current = setInterval(checkDirectHelper, 1500);
+      tryConnectDirect(false);
     } else {
       if (directTimerRef.current) {
         clearInterval(directTimerRef.current);
+        directTimerRef.current = null;
       }
       setDirectStatus("disconnected");
     }
 
     return () => {
-      if (directTimerRef.current) clearInterval(directTimerRef.current);
+      if (directTimerRef.current) {
+        clearInterval(directTimerRef.current);
+        directTimerRef.current = null;
+      }
     };
-  }, [labelMode, currentFile, isPlaying, isWaitingInterval]);
+  }, [labelMode, currentFile ? currentFile.path : null]);
 
   // --- MODE 2: Clipboard monitoring (with iframe secure fallback) ---
   const checkClipboard = async () => {
@@ -215,7 +353,7 @@ export default function LabelingConsole({
     try {
       const text = await navigator.clipboard.readText();
       setClipboardStatus("active");
-      if (text && text !== clipboardContent) {
+      if (text && text !== clipboardContentRef.current) {
         setClipboardContent(text);
         const didLabel = tryMatchingAndLabel(text, "剪贴板");
         if (didLabel) {
@@ -239,26 +377,39 @@ export default function LabelingConsole({
     if (labelMode === "clipboard" && currentFile) {
       setClipboardStatus("active");
       addLog("已开启剪贴板半自动模式（支持轮询提取）", 'info');
-      // Set recursive interval timer for clipboard read
+      if (clipboardTimerRef.current) {
+        clearInterval(clipboardTimerRef.current);
+      }
       clipboardTimerRef.current = setInterval(checkClipboard, 1500);
     } else {
       if (clipboardTimerRef.current) {
         clearInterval(clipboardTimerRef.current);
+        clipboardTimerRef.current = null;
       }
       setClipboardStatus("inactive");
     }
 
     return () => {
-      if (clipboardTimerRef.current) clearInterval(clipboardTimerRef.current);
+      if (clipboardTimerRef.current) {
+        clearInterval(clipboardTimerRef.current);
+        clipboardTimerRef.current = null;
+      }
     };
-  }, [labelMode, currentFile, clipboardContent]);
+  }, [labelMode, currentFile ? currentFile.path : null]);
 
   // --- MODE 3: File monitoring (`result.txt` on the Node.js server system) ---
   const checkResultFile = async () => {
-    if (!resultFilePath) return;
+    const rPath = resultFilePathRef.current;
+    if (!rPath) return;
+    let response: Response | null = null;
     try {
-      const response = await fetch(`/api/check-file-result?filePath=${encodeURIComponent(resultFilePath)}`);
+      response = await fetch(`/api/check-file-result?filePath=${encodeURIComponent(rPath)}`);
       if (!response.ok) {
+        if (response.body) {
+          try {
+            await response.body.cancel();
+          } catch (_) {}
+        }
         setFileStatus("error");
         return;
       }
@@ -268,15 +419,26 @@ export default function LabelingConsole({
         if (data.exists) {
           setFileStatus("connected");
           const text = data.content;
-          if (text && text !== fileContent) {
+          if (text && text !== fileContentRef.current) {
             setFileContent(text);
             tryMatchingAndLabel(text, "result.txt 监听记录");
           }
         } else {
           setFileStatus("disconnected");
         }
+      } else {
+        if (response.body) {
+          try {
+            await response.body.cancel();
+          } catch (_) {}
+        }
       }
     } catch (err) {
+      if (response && response.body) {
+        try {
+          await response.body.cancel();
+        } catch (_) {}
+      }
       setFileStatus("error");
     }
   };
@@ -285,18 +447,25 @@ export default function LabelingConsole({
     if (labelMode === "file" && currentFile) {
       addLog(`已开启服务端 result.txt 文件监听（全自动）`, 'info');
       checkResultFile(); // instant first tick
+      if (fileTimerRef.current) {
+        clearInterval(fileTimerRef.current);
+      }
       fileTimerRef.current = setInterval(checkResultFile, 1500);
     } else {
       if (fileTimerRef.current) {
         clearInterval(fileTimerRef.current);
+        fileTimerRef.current = null;
       }
       setFileStatus("disconnected");
     }
 
     return () => {
-      if (fileTimerRef.current) clearInterval(fileTimerRef.current);
+      if (fileTimerRef.current) {
+        clearInterval(fileTimerRef.current);
+        fileTimerRef.current = null;
+      }
     };
-  }, [labelMode, currentFile, fileContent, resultFilePath]);
+  }, [labelMode, currentFile ? currentFile.path : null]);
 
   // Handle manual mock clipboard analysis submissions (iframe friendly)
   const handleManualPasteSubmit = (e: React.FormEvent) => {
@@ -444,7 +613,18 @@ export default function LabelingConsole({
               <span className="text-xs font-mono">
                 {directStatus === 'connected' && <span className="text-emerald-600 font-semibold animate-pulse">{lang === 'zh' ? '● 助手已连接' : '● Helper Connected'}</span>}
                 {directStatus === 'disconnected' && <span className="text-slate-500">{lang === 'zh' ? '○ 正在等待连接...' : '○ Waiting helper connect...'}</span>}
-                {directStatus === 'error' && <span className="text-amber-500 font-medium">{lang === 'zh' ? '⚠️ 尝试连接本地 127.0.0.1:3124' : '⚠️ Retrying local port 3124'}</span>}
+                {directStatus === 'error' && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="text-amber-500 font-medium">{lang === 'zh' ? '⚠️ 未连接' : '⚠️ Not Connected'}</span>
+                    <button
+                      type="button"
+                      onClick={() => tryConnectDirect(true)}
+                      className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] px-1.5 py-0.5 rounded border border-indigo-200 cursor-pointer active:scale-95 transition-all select-none"
+                    >
+                      {lang === 'zh' ? '手动连接' : 'Reconnect'}
+                    </button>
+                  </span>
+                )}
               </span>
             </div>
 

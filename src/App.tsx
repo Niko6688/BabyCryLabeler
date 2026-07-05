@@ -36,6 +36,33 @@ export default function App() {
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [backendProgress, setBackendProgress] = useState<Record<string, any>>({});
   const [currentFile, setCurrentFile] = useState<AudioFile | null>(null);
+  const [memoryWarning, setMemoryWarning] = useState<string | null>(null);
+
+  // Helper: Retrieve progress data dynamically with robust file-matching (exact key, absolute path, uploaded key, or fallback name match)
+  const getProgressForFile = (file: AudioFile) => {
+    if (backendProgress[file.path]) return backendProgress[file.path];
+    if (file.absolutePath && backendProgress[file.absolutePath]) return backendProgress[file.absolutePath];
+    
+    const uploadedKey = `${UPLOADED_PREFIX}${file.name}`;
+    if (backendProgress[uploadedKey]) return backendProgress[uploadedKey];
+    
+    // Symmetrical fallback: Search backendProgress for any entry where the name matches file.name
+    const found = Object.values(backendProgress).find(
+      (entry: any) => entry && entry.name === file.name
+    );
+    return found || null;
+  };
+
+  const isAudioFileLabeled = (file: AudioFile): boolean => {
+    const p = getProgressForFile(file);
+    if (!p) return false;
+    if (p.label && p.label.trim() !== "") return true;
+    if (p.tags) {
+      if (Array.isArray(p.tags) && p.tags.length > 0) return true;
+      if (typeof p.tags === 'string' && p.tags.trim() !== "") return true;
+    }
+    return false;
+  };
 
   // Dynamically map backend keys (absolute paths or [uploaded]filenames) to frontend keys (like local-file://...)
   const progress = useMemo(() => {
@@ -45,22 +72,23 @@ export default function App() {
       mapped[key] = value as any;
     });
 
-    // Then, for each current file, if it's a local file, map its file.path to its entry in backendProgress
+    // Then, for each current file, map its file.path to its best matched entry in backendProgress
     files.forEach(file => {
-      if (file.path.startsWith('local-file://') || file.path.startsWith('blob:')) {
-        const backendKey = `${UPLOADED_PREFIX}${file.name}`;
-        if (backendProgress[backendKey]) {
-          mapped[file.path] = backendProgress[backendKey] as any;
-        }
-      } else {
-        if (backendProgress[file.path]) {
-          mapped[file.path] = backendProgress[file.path] as any;
-        }
+      const matched = getProgressForFile(file);
+      if (matched) {
+        mapped[file.path] = matched as any;
       }
     });
 
     return mapped;
   }, [backendProgress, files]);
+
+  // Sync state modifications into browser's persistent localStorage instantly
+  useEffect(() => {
+    if (backendProgress && Object.keys(backendProgress).length > 0) {
+      localStorage.setItem('baby_cry_progress_backup', JSON.stringify(backendProgress));
+    }
+  }, [backendProgress]);
 
   // Path configurations
   const [scannedPath, setScannedPath] = useState<string>(() => {
@@ -78,6 +106,9 @@ export default function App() {
   const [isWaitingInterval, setIsWaitingInterval] = useState(false);
   const [waitingSecondsLeft, setWaitingSecondsLeft] = useState(0);
   const [skipWaitAfterLastTrack, setSkipWaitAfterLastTrack] = useState(true);
+  const [skipLabeled, setSkipLabeled] = useState<boolean>(() => {
+    return localStorage.getItem('skip_labeled') === 'true';
+  });
   const [intervalSeconds, setIntervalSeconds] = useState<number>(() => {
     const saved = localStorage.getItem('interval_seconds');
     if (saved) {
@@ -120,6 +151,10 @@ export default function App() {
     localStorage.setItem('interval_seconds', intervalSeconds.toString());
   }, [intervalSeconds]);
 
+  useEffect(() => {
+    localStorage.setItem('skip_labeled', skipLabeled ? 'true' : 'false');
+  }, [skipLabeled]);
+
   // Handle waiting interval counter decrements
   useEffect(() => {
     if (isWaitingInterval) {
@@ -148,8 +183,9 @@ export default function App() {
     let active = true;
     const syncStatus = async () => {
       if (!active) return;
+      let response: Response | null = null;
       try {
-        const response = await fetch('/api/update-playback-status', {
+        response = await fetch('/api/update-playback-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -168,7 +204,10 @@ export default function App() {
           if (data.command) {
             const command = data.command;
             // Clear command immediately so it isn't executed twice
-            await fetch('/api/clear-playback-command', { method: 'POST' });
+            const clearRes = await fetch('/api/clear-playback-command', { method: 'POST' });
+            if (clearRes.body) {
+              await clearRes.body.cancel();
+            }
             
             if (command === "skip") {
               handleSkipTrack();
@@ -176,9 +215,18 @@ export default function App() {
               handleSaveLabel(data.label);
             }
           }
+        } else {
+          if (response && response.body) {
+            await response.body.cancel();
+          }
         }
       } catch (err) {
         console.error("Failed to sync status with Express backend:", err);
+        if (response && response.body) {
+          try {
+            await response.body.cancel();
+          } catch (_) {}
+        }
       }
     };
 
@@ -193,79 +241,231 @@ export default function App() {
     };
   }, [currentFile, isPlaying, isWaitingInterval, waitingSecondsLeft]);
 
-  // Fetch labeling history
+  // Periodic memory clean-up (every 30 minutes)
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      // Clear active Blob URL if labeled and not playing
+      import('./lib/localFilesRegistry').then(({ revokeActiveLocalFileUrl }) => {
+        revokeActiveLocalFileUrl();
+      }).catch(() => {});
+
+      // Clear console logs in other components via custom event
+      window.dispatchEvent(new CustomEvent('clear-app-caches'));
+
+      // Prune progress object to keep only essential fields
+      setBackendProgress(prev => {
+        const pruned: Record<string, any> = {};
+        Object.entries(prev).forEach(([key, val]) => {
+          if (val && typeof val === 'object') {
+            const v = val as any;
+            pruned[key] = {
+              label: v.label || "",
+              time: v.time || "",
+              playCount: v.playCount || 0,
+              lastPlayedAt: v.lastPlayedAt || ""
+            };
+          }
+        });
+        return pruned;
+      });
+
+      console.log("30-minute memory cleanup performed successfully!");
+    }, 30 * 60 * 1000); // 30 minutes
+
+    return () => clearInterval(intervalId);
+  }, []);
+
+  // Memory usage monitoring
+  useEffect(() => {
+    const checkMemory = () => {
+      const perf = window.performance as any;
+      if (perf && perf.memory) {
+        const usedSize = perf.memory.usedJSHeapSize; // in bytes
+        const limitSize = 500 * 1024 * 1024; // 500MB
+        if (usedSize > limitSize) {
+          const usedMB = (usedSize / (1024 * 1024)).toFixed(1);
+          setMemoryWarning(
+            lang === 'zh'
+              ? `⚠️ 警告：当前页面已占用内存 ${usedMB}MB（超过安全阈值 500MB），可能会导致浏览器卡顿。为了保证标注工作的连续性，建议您在导出并保存当前进度后，点击刷新页面以释放内存。`
+              : `⚠️ Warning: Current page memory usage is ${usedMB}MB (exceeding 500MB safety threshold), which may cause lagging. To prevent loss of progress, we highly recommend exporting your work first, then refreshing the page.`
+          );
+        } else {
+          setMemoryWarning(null);
+        }
+      }
+    };
+
+    // Check memory every 10 seconds
+    const interval = setInterval(checkMemory, 10000);
+    checkMemory();
+
+    return () => clearInterval(interval);
+  }, [lang]);
+
+  // Fetch labeling history and sync with localStorage backup
   const fetchProgress = async () => {
+    let res: Response | null = null;
+    let localBackup: Record<string, any> = {};
+
+    // 1. Try reading from client-side localStorage backup first
     try {
-      const res = await fetch('/api/progress');
+      const saved = localStorage.getItem('baby_cry_progress_backup');
+      if (saved) {
+        localBackup = JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error("Failed to parse localStorage backup:", e);
+    }
+
+    try {
+      res = await fetch('/api/progress');
       const contentType = res.headers.get("content-type");
       if (res.ok && contentType && contentType.includes("application/json")) {
-        const data = await res.json();
-        setBackendProgress(data);
+        const backendData = await res.json();
+
+        // 2. MERGE logic: Combine local backup and backend data
+        const merged: Record<string, any> = { ...localBackup };
+
+        Object.entries(backendData).forEach(([key, val]) => {
+          if (val && typeof val === 'object') {
+            const serverEntry = val as any;
+            const localEntry = merged[key] || {};
+
+            // Prefer whichever has non-empty label or higher playCount
+            const mergedLabel = serverEntry.label || localEntry.label || "";
+            const mergedTags = serverEntry.tags || localEntry.tags || mergedLabel;
+            const mergedPlayCount = Math.max(
+              typeof serverEntry.playCount === 'number' ? serverEntry.playCount : 0,
+              typeof localEntry.playCount === 'number' ? localEntry.playCount : 0
+            );
+            const mergedLastPlayedAt = serverEntry.lastPlayedAt || localEntry.lastPlayedAt || "";
+            const mergedTime = serverEntry.time || localEntry.time || "";
+
+            merged[key] = {
+              ...localEntry,
+              ...serverEntry,
+              label: mergedLabel,
+              tags: mergedTags,
+              playCount: mergedPlayCount,
+              lastPlayedAt: mergedLastPlayedAt,
+              time: mergedTime,
+              name: serverEntry.name || localEntry.name || "",
+              rel: serverEntry.rel || localEntry.rel || "",
+              absolutePath: serverEntry.absolutePath || localEntry.absolutePath || ""
+            };
+          }
+        });
+
+        setBackendProgress(merged);
+        localStorage.setItem('baby_cry_progress_backup', JSON.stringify(merged));
+
+        // 3. If there's any discrepancy where local backup has more files or details, sync back to backend
+        const needsSync = Object.keys(merged).length > Object.keys(backendData).length || 
+                          Object.entries(merged).some(([key, val]) => {
+                            const bVal = backendData[key];
+                            return !bVal || (val as any).label !== (bVal as any).label;
+                          });
+
+        if (needsSync && Object.keys(merged).length > 0) {
+          console.log("Client backup has more data than server, syncing to backend server...");
+          await fetch('/api/sync-progress', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientProgress: merged })
+          });
+        }
+      } else {
+        if (res && res.body) await res.body.cancel();
+        // Fallback to local backup if backend request fails
+        if (Object.keys(localBackup).length > 0) {
+          setBackendProgress(localBackup);
+        }
       }
     } catch (e) {
       console.error("Failed to fetch progress", e);
+      if (res && res.body) {
+        try {
+          await res.body.cancel();
+        } catch (_) {}
+      }
+      // Fallback to local backup on network errors
+      if (Object.keys(localBackup).length > 0) {
+        setBackendProgress(localBackup);
+      }
     }
   };
 
   // Trigger scan API over scannedPath
   const handleScan = async (pathString: string, isInitial: boolean = false) => {
     setIsScanning(true);
+    let res: Response | null = null;
     try {
-      const res = await fetch('/api/scan', {
+      res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ directoryPath: pathString })
       });
-      const data = await res.json();
-      if (res.ok && data.files) {
-        const incomingFiles: AudioFile[] = data.files;
-        const existingKeys = new Set(
-          files.map(f => f.absolutePath || `[uploaded]${f.name}`)
-        );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.files) {
+          const incomingFiles: AudioFile[] = data.files.map((f: any) => ({
+            ...f,
+            absolutePath: f.absolutePath || f.path
+          }));
+          const existingKeys = new Set(
+            files.map(f => f.absolutePath || `[uploaded]${f.name}`)
+          );
 
-        const newFiles = incomingFiles.filter(f => {
-          const key = f.absolutePath || `[uploaded]${f.name}`;
-          return !existingKeys.has(key);
-        });
+          const newFiles = incomingFiles.filter(f => {
+            const key = f.absolutePath || `[uploaded]${f.name}`;
+            return !existingKeys.has(key);
+          });
 
-        if (!isInitial) {
-          if (newFiles.length === 0) {
-            alert("未发现新文件，当前列表已是最新");
+          if (!isInitial) {
+            if (newFiles.length === 0) {
+              alert("未发现新文件，当前列表已是最新");
+            } else {
+              alert(`目录扫描成功！共找到 ${incomingFiles.length} 个音频文件，其中新增 ${newFiles.length} 个。`);
+            }
+          }
+
+          if (newFiles.length > 0) {
+            setFiles(prev => [...prev, ...newFiles]);
+            
+            if (!currentFile) {
+              const unlabeled = newFiles.find((f: AudioFile) => !isAudioFileLabeled(f));
+              if (unlabeled) {
+                setCurrentFile(unlabeled);
+              } else {
+                setCurrentFile(newFiles[0]);
+              }
+            }
           } else {
-            alert(`目录扫描成功！共找到 ${incomingFiles.length} 个音频文件，其中新增 ${newFiles.length} 个。`);
-          }
-        }
-
-        if (newFiles.length > 0) {
-          setFiles(prev => [...prev, ...newFiles]);
-          
-          if (!currentFile) {
-            const unlabeled = newFiles.find((f: AudioFile) => !progress[f.path]?.label);
-            if (unlabeled) {
-              setCurrentFile(unlabeled);
-            } else {
-              setCurrentFile(newFiles[0]);
+            if (!currentFile && files.length > 0) {
+              const unlabeled = files.find((f: AudioFile) => !isAudioFileLabeled(f));
+              if (unlabeled) {
+                setCurrentFile(unlabeled);
+              } else {
+                setCurrentFile(files[0]);
+              }
             }
           }
-        } else {
-          if (!currentFile && files.length > 0) {
-            const unlabeled = files.find((f: AudioFile) => !progress[f.path]?.label);
-            if (unlabeled) {
-              setCurrentFile(unlabeled);
-            } else {
-              setCurrentFile(files[0]);
-            }
-          }
-        }
 
-        setScannedPath(data.scannedPath);
+          setScannedPath(data.scannedPath);
+        }
       } else {
+        const errorText = await res.text();
         if (!isInitial) {
-          alert(data.error || "扫描目录失败");
+          alert(errorText || "扫描目录失败");
         }
       }
     } catch (err) {
       console.error("Scan error", err);
+      if (res && res.body) {
+        try {
+          await res.body.cancel();
+        } catch (_) {}
+      }
     } finally {
       setIsScanning(false);
     }
@@ -274,8 +474,9 @@ export default function App() {
   // Generate synthetic demo audio waveforms for immediate sandbox trial
   const handleGenerateDemo = async () => {
     setIsScanning(true);
+    let res: Response | null = null;
     try {
-      const res = await fetch('/api/generate-demo-audios', { method: 'POST' });
+      res = await fetch('/api/generate-demo-audios', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setScannedPath(data.scannedPath);
@@ -285,10 +486,16 @@ export default function App() {
         await handleScan(data.scannedPath, true);
         alert(data.message);
       } else {
+        if (res.body) await res.body.cancel();
         alert("合成演示音频失败");
       }
     } catch (err) {
       console.error("Failed to generate demo audios", err);
+      if (res && res.body) {
+        try {
+          await res.body.cancel();
+        } catch (_) {}
+      }
     } finally {
       setIsScanning(false);
     }
@@ -296,8 +503,12 @@ export default function App() {
 
   // Resets metadata database on server
   const handleResetAll = async () => {
+    let res: Response | null = null;
     try {
-      const res = await fetch('/api/reset-all', { method: 'POST' });
+      res = await fetch('/api/reset-all', { method: 'POST' });
+      if (res.body) {
+        await res.body.cancel();
+      }
       if (res.ok) {
         // 1. Reset all React state variables
         setBackendProgress({});
@@ -325,6 +536,11 @@ export default function App() {
       }
     } catch (err) {
       alert("清理重置失败");
+      if (res && res.body) {
+        try {
+          await res.body.cancel();
+        } catch (_) {}
+      }
     }
   };
 
@@ -370,8 +586,9 @@ export default function App() {
   // Triggered when a track has finished playback loops
   const handleTrackCompletedPlayback = async () => {
     if (currentFile) {
+      let res: Response | null = null;
       try {
-        const res = await fetch('/api/record-play', {
+        res = await fetch('/api/record-play', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -384,9 +601,16 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           setBackendProgress(data.progress);
+        } else {
+          if (res.body) await res.body.cancel();
         }
       } catch (err) {
         console.error("Failed to record play completion", err);
+        if (res && res.body) {
+          try {
+            await res.body.cancel();
+          } catch (_) {}
+        }
       }
     }
 
@@ -413,51 +637,107 @@ export default function App() {
     return currentIndex === files.length - 1;
   };
 
+  const isFileLabeled = (filePath: string): boolean => {
+    const file = files.find(f => f.path === filePath);
+    if (file) return isAudioFileLabeled(file);
+    const p = progress[filePath];
+    if (!p) return false;
+    if (p.label && p.label.trim() !== "") return true;
+    const tags = (p as any).tags;
+    if (tags) {
+      if (Array.isArray(tags) && tags.length > 0) return true;
+      if (typeof tags === 'string' && tags.trim() !== "") return true;
+    }
+    return false;
+  };
+
   // Select next target track using order/random policies
   const loadNextUnlabeledTrack = () => {
     if (files.length === 0) return;
 
     let nextTrack: AudioFile | null = null;
 
-    if (playbackMode === 'random') {
-      const unlabeled = files.filter(f => !progress[f.path]?.label);
-      if (unlabeled.length > 0) {
+    if (skipLabeled) {
+      const unlabeled = files.filter(f => !isFileLabeled(f.path));
+      if (unlabeled.length === 0) {
+        setIsPlaying(false);
+        setIsWaitingInterval(false);
+        alert(lang === 'zh' ? '所有音频已完成标注' : 'All audio files have been labeled');
+        return;
+      }
+
+      if (playbackMode === 'random') {
         const randIdx = Math.floor(Math.random() * unlabeled.length);
         nextTrack = unlabeled[randIdx];
       } else {
-        // Fallback to choosing any random track if all labeled
-        const randIdx = Math.floor(Math.random() * files.length);
-        nextTrack = files[randIdx];
-      }
-    } else {
-      // Order sequence policy
-      if (!currentFile) {
-        nextTrack = files[0];
-      } else {
-        const currentIndex = files.findIndex(f => f.path === currentFile.path);
-        // Find first unlabeled after currentIndex, or pick from beginning
-        let found = false;
-        for (let i = currentIndex + 1; i < files.length; i++) {
-          if (!progress[files[i].path]?.label) {
-            nextTrack = files[i];
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          // Wrap around to scan list starting from 0 to current
-          for (let i = 0; i <= currentIndex; i++) {
-            if (!progress[files[i].path]?.label) {
+        // Order sequence policy, only considering unlabeled files
+        if (!currentFile) {
+          nextTrack = unlabeled[0];
+        } else {
+          // Find current index in the full list
+          const currentIndex = files.findIndex(f => f.path === currentFile.path);
+          // Find first unlabeled after currentIndex
+          let found = false;
+          for (let i = currentIndex + 1; i < files.length; i++) {
+            if (!isFileLabeled(files[i].path)) {
               nextTrack = files[i];
               found = true;
               break;
             }
           }
+          if (!found) {
+            // Circular wrap around from beginning
+            for (let i = 0; i <= currentIndex; i++) {
+              if (!isFileLabeled(files[i].path)) {
+                nextTrack = files[i];
+                found = true;
+                break;
+              }
+            }
+          }
         }
-        // If still nothing is unlabeled, load the immediate sequence index or circular wrap
-        if (!nextTrack) {
-          const nextIdx = (currentIndex + 1) % files.length;
-          nextTrack = files[nextIdx];
+      }
+    } else {
+      if (playbackMode === 'random') {
+        const unlabeled = files.filter(f => !isFileLabeled(f.path));
+        if (unlabeled.length > 0) {
+          const randIdx = Math.floor(Math.random() * unlabeled.length);
+          nextTrack = unlabeled[randIdx];
+        } else {
+          // Fallback to choosing any random track if all labeled
+          const randIdx = Math.floor(Math.random() * files.length);
+          nextTrack = files[randIdx];
+        }
+      } else {
+        // Order sequence policy
+        if (!currentFile) {
+          nextTrack = files[0];
+        } else {
+          const currentIndex = files.findIndex(f => f.path === currentFile.path);
+          // Find first unlabeled after currentIndex, or pick from beginning
+          let found = false;
+          for (let i = currentIndex + 1; i < files.length; i++) {
+            if (!isFileLabeled(files[i].path)) {
+              nextTrack = files[i];
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            // Wrap around to scan list starting from 0 to current
+            for (let i = 0; i <= currentIndex; i++) {
+              if (!isFileLabeled(files[i].path)) {
+                nextTrack = files[i];
+                found = true;
+                break;
+              }
+            }
+          }
+          // If still nothing is unlabeled, load the immediate sequence index or circular wrap
+          if (!nextTrack) {
+            const nextIdx = (currentIndex + 1) % files.length;
+            nextTrack = files[nextIdx];
+          }
         }
       }
     }
@@ -466,6 +746,22 @@ export default function App() {
       setCurrentFile(nextTrack);
     }
   };
+
+  // Automatically skip the current track if skipLabeled is enabled and the track is labeled
+  const isCurrentFileLabeled = currentFile ? isFileLabeled(currentFile.path) : false;
+
+  useEffect(() => {
+    if (skipLabeled && isCurrentFileLabeled && files.length > 0) {
+      const unlabeled = files.filter(f => !isFileLabeled(f.path));
+      if (unlabeled.length === 0) {
+        setIsPlaying(false);
+        setIsWaitingInterval(false);
+        alert(lang === 'zh' ? '所有音频已完成标注' : 'All audio files have been labeled');
+      } else {
+        loadNextUnlabeledTrack();
+      }
+    }
+  }, [skipLabeled, isCurrentFileLabeled, files.length]);
 
   // Called when wait countdown finishes naturally without any label submittal
   const handleCountdownCompleted = () => {
@@ -477,8 +773,9 @@ export default function App() {
   const handleSaveLabel = async (labelString: string) => {
     if (!currentFile) return;
 
+    let res: Response | null = null;
     try {
-      const res = await fetch('/api/save-label', {
+      res = await fetch('/api/save-label', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -498,10 +795,16 @@ export default function App() {
         loadNextUnlabeledTrack();
         setIsPlaying(true);
       } else {
+        if (res.body) await res.body.cancel();
         console.error("Save label call failed");
       }
     } catch (err) {
       console.error("Error saving label", err);
+      if (res && res.body) {
+        try {
+          await res.body.cancel();
+        } catch (_) {}
+      }
     }
   };
 
@@ -509,8 +812,9 @@ export default function App() {
     const targetFile = files.find(f => f.path === filePath);
     if (!targetFile) return;
 
+    let res: Response | null = null;
     try {
-      const res = await fetch('/api/save-label', {
+      res = await fetch('/api/save-label', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -525,10 +829,16 @@ export default function App() {
         const data = await res.json();
         setBackendProgress(data.progress);
       } else {
+        if (res.body) await res.body.cancel();
         console.error("Save label for path failed");
       }
     } catch (err) {
       console.error("Error saving label for path", err);
+      if (res && res.body) {
+        try {
+          await res.body.cancel();
+        } catch (_) {}
+      }
     }
   };
 
@@ -602,6 +912,22 @@ export default function App() {
         </div>
       </header>
 
+      {/* Memory Warning Banner */}
+      {memoryWarning && (
+        <div id="memory-warning-banner" className="bg-red-600 text-white font-bold py-3 px-6 text-sm flex items-center justify-between shadow-md z-50">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+            <span>{memoryWarning}</span>
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="ml-4 bg-white text-red-600 hover:bg-slate-100 px-3 py-1 rounded-md text-xs font-extrabold cursor-pointer transition-all shrink-0"
+          >
+            {lang === 'zh' ? '立即刷新' : 'Refresh Now'}
+          </button>
+        </div>
+      )}
+
       {/* Main Workspace Layout split */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         
@@ -658,6 +984,8 @@ export default function App() {
             waitingSecondsLeft={waitingSecondsLeft}
             skipWaitAfterLastTrack={skipWaitAfterLastTrack}
             setSkipWaitAfterLastTrack={setSkipWaitAfterLastTrack}
+            skipLabeled={skipLabeled}
+            setSkipLabeled={setSkipLabeled}
           />
 
           {/* Dedicated Manual & Automatic Matcher consoles */}

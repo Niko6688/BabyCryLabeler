@@ -6,7 +6,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Play, Pause, SkipForward, Square, RotateCcw, Volume2, Sparkles, Infinity as InfinityIcon } from 'lucide-react';
 import { AudioFile } from '../types';
-import { getLocalFileUrl } from '../lib/localFilesRegistry';
+import { getLocalFileUrl, revokeActiveLocalFileUrl } from '../lib/localFilesRegistry';
 import { Language, getTranslations } from '../lib/i18n';
 
 interface AudioPlayerProps {
@@ -21,6 +21,8 @@ interface AudioPlayerProps {
   waitingSecondsLeft: number;
   skipWaitAfterLastTrack: boolean;
   setSkipWaitAfterLastTrack: (skip: boolean) => void;
+  skipLabeled: boolean;
+  setSkipLabeled: (skip: boolean) => void;
 }
 
 export default function AudioPlayer({
@@ -34,10 +36,21 @@ export default function AudioPlayer({
   isWaitingInterval,
   waitingSecondsLeft,
   skipWaitAfterLastTrack,
-  setSkipWaitAfterLastTrack
+  setSkipWaitAfterLastTrack,
+  skipLabeled,
+  setSkipLabeled
 }: AudioPlayerProps) {
   const t = getTranslations(lang);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Web Audio refs for short audio seamless looping
+  const webAudioCtxRef = useRef<AudioContext | null>(null);
+  const webAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const webAudioBufferRef = useRef<AudioBuffer | null>(null);
+  const webAudioGainRef = useRef<GainNode | null>(null);
+  const webAudioStartTimeRef = useRef<number>(0);
+  const webAudioPauseTimeRef = useRef<number>(0);
+  const webAudioTimerRef = useRef<number | null>(null);
 
   // Waveform visualization states
   const [audioPeaks, setAudioPeaks] = useState<number[]>([]);
@@ -61,9 +74,15 @@ export default function AudioPlayer({
     let active = true;
 
     const loadRealPeaks = async () => {
+      let response: Response | null = null;
       try {
-        const response = await fetch(streamUrl);
-        if (!response.ok) throw new Error('Fetch audio stream failed');
+        response = await fetch(streamUrl);
+        if (!response.ok) {
+          if (response.body) {
+            await response.body.cancel();
+          }
+          throw new Error('Fetch audio stream failed');
+        }
         const arrayBuffer = await response.arrayBuffer();
         
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -73,6 +92,19 @@ export default function AudioPlayer({
         // decodeAudioData
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
         const channelData = audioBuffer.getChannelData(0); // Left channel peak samples
+        
+        // Save the decoded audio buffer for Web Audio playback
+        webAudioBufferRef.current = audioBuffer;
+
+        if (active) {
+          const fileDuration = audioBuffer.duration;
+          if (fileDuration < 1) {
+            setDuration(fileDuration);
+            const minRequiredDuration = 30;
+            const needed = Math.ceil(minRequiredDuration / fileDuration);
+            setLoopsNeeded(needed > 0 ? needed : 1);
+          }
+        }
         
         const numPoints = 120; // Exact count of visualizer bars
         const step = Math.floor(channelData.length / numPoints);
@@ -145,8 +177,106 @@ export default function AudioPlayer({
   // Volume control State
   const [volume, setVolume] = useState(0.8);
 
+  const stopWebAudio = () => {
+    if (webAudioSourceRef.current) {
+      try {
+        webAudioSourceRef.current.onended = null;
+        webAudioSourceRef.current.stop();
+      } catch (e) {}
+      webAudioSourceRef.current = null;
+    }
+    if (webAudioTimerRef.current) {
+      window.clearInterval(webAudioTimerRef.current);
+      webAudioTimerRef.current = null;
+    }
+  };
+
+  const playWebAudio = () => {
+    stopWebAudio();
+
+    const buffer = webAudioBufferRef.current;
+    if (!buffer) return;
+
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+
+    if (!webAudioCtxRef.current || webAudioCtxRef.current.state === 'closed') {
+      webAudioCtxRef.current = new AudioCtx();
+    }
+    const ctx = webAudioCtxRef.current;
+
+    if (ctx.state === 'suspended') {
+      ctx.resume();
+    }
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.setValueAtTime(volume, ctx.currentTime);
+    gainNode.connect(ctx.destination);
+    webAudioGainRef.current = gainNode;
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true; // Seamless hardware loop
+    source.connect(gainNode);
+
+    const offset = webAudioPauseTimeRef.current % buffer.duration;
+    webAudioStartTimeRef.current = ctx.currentTime - webAudioPauseTimeRef.current;
+
+    source.start(0, offset);
+    webAudioSourceRef.current = source;
+
+    const intervalId = window.setInterval(() => {
+      if (ctx.state === 'suspended') return;
+      const elapsed = ctx.currentTime - webAudioStartTimeRef.current;
+      const fileDuration = buffer.duration;
+      const totalRequiredTime = loopsNeeded * fileDuration;
+
+      if (elapsed >= totalRequiredTime) {
+        stopWebAudio();
+        setIsPlaying(false);
+        onTrackEnd();
+        return;
+      }
+
+      const currentLoopIndex = Math.floor(elapsed / fileDuration) + 1;
+      const currentSecs = elapsed % fileDuration;
+
+      setCurrentTime(currentSecs);
+      setCurrentLoop(Math.min(loopsNeeded, currentLoopIndex));
+      setAccumulatedPlayTime(Math.floor(elapsed / fileDuration) * fileDuration);
+    }, 50);
+
+    webAudioTimerRef.current = intervalId;
+  };
+
+  const pauseWebAudio = () => {
+    if (webAudioCtxRef.current && webAudioSourceRef.current) {
+      const elapsed = webAudioCtxRef.current.currentTime - webAudioStartTimeRef.current;
+      webAudioPauseTimeRef.current = elapsed;
+    }
+    stopWebAudio();
+  };
+
+  // Clean up Web Audio Context on unmount
+  useEffect(() => {
+    return () => {
+      stopWebAudio();
+      if (webAudioCtxRef.current) {
+        webAudioCtxRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
+
   // Initialize and load new file
   useEffect(() => {
+    const previousPath = currentFile ? currentFile.path : null;
+
+    // Reset Web Audio states
+    webAudioPauseTimeRef.current = 0;
+    webAudioStartTimeRef.current = 0;
+    stopWebAudio();
+    webAudioBufferRef.current = null;
+
     if (audioRef.current && currentFile) {
       // Stream path (support local File blobs in the browser sandbox mode)
       let streamUrl = currentFile.path;
@@ -165,38 +295,57 @@ export default function AudioPlayer({
       setLoopsNeeded(1);
       setCurrentLoop(1);
       setAccumulatedPlayTime(0);
-
-      if (isPlaying) {
-        audioRef.current.play().catch(() => {
-          // Auto-play was blocked or failed
-          setIsPlaying(false);
-        });
-      }
     } else if (!currentFile && audioRef.current) {
       audioRef.current.pause();
     }
+
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        try {
+          audioRef.current.load();
+        } catch (e) {}
+      }
+      // Whenever we switch from a local file, we revoke its Blob URL to release browser memory immediately
+      if (previousPath && previousPath.startsWith('local-file://')) {
+        revokeActiveLocalFileUrl();
+      }
+      stopWebAudio();
+    };
   }, [currentFile]);
 
   // Handle Play / Pause commands
   useEffect(() => {
     if (!audioRef.current) return;
     if (isPlaying && currentFile && !isWaitingInterval) {
-      audioRef.current.play().catch(() => {
-        setIsPlaying(false);
-      });
+      if (duration > 0 && duration < 1) {
+        audioRef.current.pause();
+        playWebAudio();
+      } else {
+        stopWebAudio();
+        audioRef.current.play().catch(() => {
+          setIsPlaying(false);
+        });
+      }
     } else {
       audioRef.current.pause();
+      pauseWebAudio();
     }
-  }, [isPlaying, isWaitingInterval]);
+  }, [isPlaying, isWaitingInterval, duration]);
 
   // Audio metadata loaded handler
   const handleLoadedMetadata = () => {
     if (!audioRef.current) return;
     const fileDuration = audioRef.current.duration;
     if (!fileDuration || isNaN(fileDuration)) {
-      setDuration(30); // fallback
+      if (duration === 0) {
+        setDuration(30); // fallback
+      }
       return;
     }
+    if (fileDuration < 1) return; // skip for short files
+
     setDuration(fileDuration);
 
     // Calculate loops: At least 30 seconds total duration
@@ -208,12 +357,15 @@ export default function AudioPlayer({
   // Monitor playback details
   const handleTimeUpdate = () => {
     if (!audioRef.current) return;
+    if (duration > 0 && duration < 1) return; // skip for short files
+
     const current = audioRef.current.currentTime;
     setCurrentTime(current);
 
     // Safety fallback: retrieve valid duration if current state is uninitialized
     if ((duration === 0 || isNaN(duration)) && audioRef.current.duration && !isNaN(audioRef.current.duration) && audioRef.current.duration > 0) {
       const fileDuration = audioRef.current.duration;
+      if (fileDuration < 1) return; // skip for short files
       setDuration(fileDuration);
 
       const minRequiredDuration = 30;
@@ -225,6 +377,7 @@ export default function AudioPlayer({
   // Handle local track audio loop cycles
   const handleAudioEnded = () => {
     if (!audioRef.current) return;
+    if (duration > 0 && duration < 1) return; // skip for short files
 
     if (currentLoop < loopsNeeded) {
       // Loop again!
@@ -243,6 +396,9 @@ export default function AudioPlayer({
     setVolume(v);
     if (audioRef.current) {
       audioRef.current.volume = v;
+    }
+    if (webAudioGainRef.current && webAudioCtxRef.current) {
+      webAudioGainRef.current.gain.setValueAtTime(v, webAudioCtxRef.current.currentTime);
     }
   };
 
@@ -277,13 +433,24 @@ export default function AudioPlayer({
 
   // Jump to specific playback location on waveform click
   const handleWaveformClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!audioRef.current || !duration || duration === Infinity) return;
+    if (!duration || duration === Infinity) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const percentage = clickX / rect.width;
     const targetTime = percentage * duration;
-    audioRef.current.currentTime = targetTime;
-    setCurrentTime(targetTime);
+
+    if (duration < 1) {
+      webAudioPauseTimeRef.current = targetTime;
+      if (isPlaying && !isWaitingInterval) {
+        playWebAudio();
+      } else {
+        setCurrentTime(targetTime);
+      }
+    } else {
+      if (!audioRef.current) return;
+      audioRef.current.currentTime = targetTime;
+      setCurrentTime(targetTime);
+    }
   };
 
   return (
@@ -317,18 +484,35 @@ export default function AudioPlayer({
             </p>
           </div>
 
-          {/* Skip waiting toggle */}
-          <div className="flex items-center space-x-2 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg p-2 shrink-0">
-            <label className="text-[11px] text-slate-300 font-medium cursor-pointer" htmlFor="skip-wait-cb">
-              {t.skipWaitText}
-            </label>
-            <input
-              id="skip-wait-cb"
-              type="checkbox"
-              checked={skipWaitAfterLastTrack}
-              onChange={(e) => setSkipWaitAfterLastTrack(e.target.checked)}
-              className="accent-indigo-500 rounded border-slate-700 w-3.5 h-3.5 cursor-pointer"
-            />
+          {/* Playback Settings Toggles Container */}
+          <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+            {/* Skip waiting toggle */}
+            <div className="flex items-center space-x-2 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg p-2">
+              <label className="text-[11px] text-slate-300 font-medium cursor-pointer" htmlFor="skip-wait-cb">
+                {t.skipWaitText}
+              </label>
+              <input
+                id="skip-wait-cb"
+                type="checkbox"
+                checked={skipWaitAfterLastTrack}
+                onChange={(e) => setSkipWaitAfterLastTrack(e.target.checked)}
+                className="accent-indigo-500 rounded border-slate-700 w-3.5 h-3.5 cursor-pointer"
+              />
+            </div>
+
+            {/* Skip labeled toggle */}
+            <div className="flex items-center space-x-2 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg p-2">
+              <label className="text-[11px] text-slate-300 font-medium cursor-pointer" htmlFor="skip-labeled-cb">
+                {t.skipLabeledText}
+              </label>
+              <input
+                id="skip-labeled-cb"
+                type="checkbox"
+                checked={skipLabeled}
+                onChange={(e) => setSkipLabeled(e.target.checked)}
+                className="accent-indigo-500 rounded border-slate-700 w-3.5 h-3.5 cursor-pointer"
+              />
+            </div>
           </div>
         </div>
 

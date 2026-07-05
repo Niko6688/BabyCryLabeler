@@ -481,6 +481,60 @@ async function startServer() {
     res.json({ success: true, progress: progressData });
   });
 
+  // --- API ROUTE: Bulk Sync / Restore Progress from Client localStorage Backup ---
+  app.post("/api/sync-progress", (req, res) => {
+    const { clientProgress } = req.body;
+    if (!clientProgress || typeof clientProgress !== "object") {
+      return res.status(400).json({ error: "Missing or invalid clientProgress" });
+    }
+
+    const progressPath = path.join(process.cwd(), "progress.json");
+    let progressData: Record<string, any> = {};
+    if (fs.existsSync(progressPath)) {
+      try {
+        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+      } catch (err) {
+        // ignore and overwrite on error
+      }
+    }
+
+    // Merge logic: merge client progress data into backend progress data
+    Object.entries(clientProgress).forEach(([key, val]) => {
+      if (val && typeof val === "object") {
+        const clientEntry = val as any;
+        const serverEntry = progressData[key] || {};
+        
+        // Merge preferring non-empty labels and higher play counts
+        const mergedLabel = clientEntry.label || serverEntry.label || "";
+        const mergedTags = clientEntry.tags || serverEntry.tags || mergedLabel;
+        const mergedPlayCount = Math.max(
+          typeof clientEntry.playCount === 'number' ? clientEntry.playCount : 0,
+          typeof serverEntry.playCount === 'number' ? serverEntry.playCount : 0
+        );
+        const mergedLastPlayedAt = clientEntry.lastPlayedAt || serverEntry.lastPlayedAt || "";
+        const mergedTime = clientEntry.time || serverEntry.time || "";
+
+        progressData[key] = {
+          ...serverEntry,
+          ...clientEntry,
+          label: mergedLabel,
+          tags: mergedTags,
+          playCount: mergedPlayCount,
+          lastPlayedAt: mergedLastPlayedAt,
+          time: mergedTime,
+          name: clientEntry.name || serverEntry.name || "",
+          rel: clientEntry.rel || serverEntry.rel || "",
+          absolutePath: clientEntry.absolutePath || serverEntry.absolutePath || ""
+        };
+      }
+    });
+
+    fs.writeFileSync(progressPath, JSON.stringify(progressData, null, 2), "utf-8");
+    rebuildResultFiles(progressData);
+
+    res.json({ success: true, progress: progressData });
+  });
+
   // --- API ROUTE: Record Playback Completion ---
   app.post("/api/record-play", (req, res) => {
     const { filePath, fileName, relativePath, absolutePath } = req.body;

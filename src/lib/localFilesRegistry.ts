@@ -117,3 +117,19 @@ export function clearAllLocalFiles() {
   activePath = null;
   localFileMap.clear();
 }
+
+/**
+ * 强制释放当前播放激活的 Object URL 句柄以释放内存
+ */
+export function revokeActiveLocalFileUrl() {
+  if (activeObjectUrl) {
+    try {
+      URL.revokeObjectURL(activeObjectUrl);
+    } catch (err) {
+      // ignore
+    }
+    activeObjectUrl = null;
+  }
+  activePath = null;
+}
+
