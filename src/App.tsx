@@ -415,10 +415,10 @@ export default function App() {
             absolutePath: f.absolutePath || f.path
           }));
 
-          const existingKeys = new Set(files.map(f => f.absolutePath || f.path));
+          const existingKeys = new Set(files.map(f => f.absolutePath || f.path || f.name));
 
           const newFiles = incomingFiles.filter(f => {
-            const key = f.absolutePath || f.path;
+            const key = f.absolutePath || f.path || f.name;
             return !existingKeys.has(key);
           });
 
@@ -431,11 +431,12 @@ export default function App() {
           }
 
           if (newFiles.length > 0) {
+            console.trace("[FilesTrace] setFiles called inside handleScan with new files count:", newFiles.length);
             setFiles(prev => {
               const combined = [...prev, ...newFiles];
               const seen = new Set<string>();
               return combined.filter(f => {
-                const key = f.absolutePath || f.path;
+                const key = f.absolutePath || f.path || f.name;
                 if (seen.has(key)) return false;
                 seen.add(key);
                 return true;
@@ -560,19 +561,20 @@ export default function App() {
     const fileArray = Array.isArray(uploadedFileList) ? uploadedFileList : Array.from(uploadedFileList);
     const list = registerLocalFiles(fileArray, isDragAndDrop);
     if (list.length > 0) {
-      const existingKeys = new Set(files.map(f => f.absolutePath || f.path));
+      const existingKeys = new Set(files.map(f => f.absolutePath || f.path || f.name));
 
       const newFiles = list.filter(f => {
-        const key = f.absolutePath || f.path;
+        const key = f.absolutePath || f.path || f.name;
         return !existingKeys.has(key);
       });
 
       if (newFiles.length > 0) {
+        console.trace("[FilesTrace] setFiles called inside handleUploadLocalAudios with new files count:", newFiles.length);
         setFiles(prev => {
           const combined = [...prev, ...newFiles];
           const seen = new Set<string>();
           return combined.filter(f => {
-            const key = f.absolutePath || f.path;
+            const key = f.absolutePath || f.path || f.name;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;

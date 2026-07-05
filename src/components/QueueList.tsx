@@ -404,7 +404,7 @@ export default function QueueList({
 
               return (
                 <div
-                  key={file.absolutePath || file.path}
+                  key={file.absolutePath || file.path || file.name}
                   id={`track-${absoluteIdx}`}
                   onClick={() => onSelectTrack(file)}
                   className={`flex items-center justify-between p-3 transition-colors text-xs cursor-pointer group ${
