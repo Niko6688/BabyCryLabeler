@@ -504,8 +504,8 @@ export default function AudioPlayer({
 
       {/* Main Track info layout */}
       <div className="relative space-y-5">
-        <div className="flex justify-between items-start">
-          <div className="space-y-1">
+        <div className="flex flex-col md:flex-row justify-between md:items-start gap-4">
+          <div className="space-y-1 min-w-0 flex-1">
             <span className="text-[10px] text-indigo-400 bg-indigo-500/15 border border-indigo-500/20 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider animate-pulse">
               {lang === 'zh' ? '2. 音频控制台' : '2. Audio Control Console'}
             </span>
