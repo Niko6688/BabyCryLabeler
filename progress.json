@@ -1,0 +1,152 @@
+{
+  "/app/applet/demo_audios/new_track_1.wav": {
+    "label": "edited_tag_1",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_1.wav",
+    "rel": "new_track_1.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_1.wav",
+    "tags": "edited_tag_1",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_2.wav": {
+    "label": "edited_tag_2",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_2.wav",
+    "rel": "new_track_2.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_2.wav",
+    "tags": "edited_tag_2",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_3.wav": {
+    "label": "edited_tag_3",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_3.wav",
+    "rel": "new_track_3.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_3.wav",
+    "tags": "edited_tag_3",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_4.wav": {
+    "label": "edited_tag_4",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_4.wav",
+    "rel": "new_track_4.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_4.wav",
+    "tags": "edited_tag_4",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_5.wav": {
+    "label": "edited_tag_5",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_5.wav",
+    "rel": "new_track_5.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_5.wav",
+    "tags": "edited_tag_5",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_6.wav": {
+    "label": "edited_tag_6",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_6.wav",
+    "rel": "new_track_6.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_6.wav",
+    "tags": "edited_tag_6",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_7.wav": {
+    "label": "edited_tag_7",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_7.wav",
+    "rel": "new_track_7.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_7.wav",
+    "tags": "edited_tag_7",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_9.wav": {
+    "label": "edited_tag_9",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_9.wav",
+    "rel": "new_track_9.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_9.wav",
+    "tags": "edited_tag_9",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_8.wav": {
+    "label": "edited_tag_8",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_8.wav",
+    "rel": "new_track_8.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_8.wav",
+    "tags": "edited_tag_8",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_10.wav": {
+    "label": "edited_tag_10",
+    "time": "2026-07-06 06:55:55",
+    "name": "new_track_10.wav",
+    "rel": "new_track_10.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_10.wav",
+    "tags": "edited_tag_10",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_13.wav": {
+    "label": "new_tag_13",
+    "time": "2026-07-06 06:55:53",
+    "name": "new_track_13.wav",
+    "rel": "new_track_13.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_13.wav",
+    "tags": "new_tag_13",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_14.wav": {
+    "label": "new_tag_14",
+    "time": "2026-07-06 06:55:53",
+    "name": "new_track_14.wav",
+    "rel": "new_track_14.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_14.wav",
+    "tags": "new_tag_14",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_11.wav": {
+    "label": "new_tag_11",
+    "time": "2026-07-06 06:55:53",
+    "name": "new_track_11.wav",
+    "rel": "new_track_11.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_11.wav",
+    "tags": "new_tag_11",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_12.wav": {
+    "label": "new_tag_12",
+    "time": "2026-07-06 06:55:53",
+    "name": "new_track_12.wav",
+    "rel": "new_track_12.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_12.wav",
+    "tags": "new_tag_12",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  },
+  "/app/applet/demo_audios/new_track_15.wav": {
+    "label": "new_tag_15",
+    "time": "2026-07-06 06:55:53",
+    "name": "new_track_15.wav",
+    "rel": "new_track_15.wav",
+    "absolutePath": "/app/applet/demo_audios/new_track_15.wav",
+    "tags": "new_tag_15",
+    "playCount": 0,
+    "lastPlayedAt": ""
+  }
+}

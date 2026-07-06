@@ -1,3 +1,16 @@
-文件名,报警消息,标签,标注时间,文件路径
-dfbc88c1-8e54-4e15-a7cf-23ebaf2598b6,宝宝哭了 饥饿,饥饿,2026-06-17 05:56:28,/app/applet/blob:https:/ais-dev-gdvfrmmlpbjeucgdhbqw2f-916189265967.asia-east1.run.app/dfbc88c1-8e54-4e15-a7cf-23ebaf2598b6
-2c65bb60-a144-4ff7-a852-88785fdb607c,宝宝哭了 饥饿,饥饿,2026-06-17 06:17:35,/app/applet/blob:https:/ais-dev-gdvfrmmlpbjeucgdhbqw2f-916189265967.asia-east1.run.app/2c65bb60-a144-4ff7-a852-88785fdb607c
+﻿name,rel,absolutePath,tags,playCount,lastPlayedAt
+new_track_1.wav,new_track_1.wav,/app/applet/demo_audios/new_track_1.wav,edited_tag_1,0,
+new_track_2.wav,new_track_2.wav,/app/applet/demo_audios/new_track_2.wav,edited_tag_2,0,
+new_track_3.wav,new_track_3.wav,/app/applet/demo_audios/new_track_3.wav,edited_tag_3,0,
+new_track_4.wav,new_track_4.wav,/app/applet/demo_audios/new_track_4.wav,edited_tag_4,0,
+new_track_5.wav,new_track_5.wav,/app/applet/demo_audios/new_track_5.wav,edited_tag_5,0,
+new_track_6.wav,new_track_6.wav,/app/applet/demo_audios/new_track_6.wav,edited_tag_6,0,
+new_track_7.wav,new_track_7.wav,/app/applet/demo_audios/new_track_7.wav,edited_tag_7,0,
+new_track_9.wav,new_track_9.wav,/app/applet/demo_audios/new_track_9.wav,edited_tag_9,0,
+new_track_8.wav,new_track_8.wav,/app/applet/demo_audios/new_track_8.wav,edited_tag_8,0,
+new_track_10.wav,new_track_10.wav,/app/applet/demo_audios/new_track_10.wav,edited_tag_10,0,
+new_track_13.wav,new_track_13.wav,/app/applet/demo_audios/new_track_13.wav,new_tag_13,0,
+new_track_14.wav,new_track_14.wav,/app/applet/demo_audios/new_track_14.wav,new_tag_14,0,
+new_track_11.wav,new_track_11.wav,/app/applet/demo_audios/new_track_11.wav,new_tag_11,0,
+new_track_12.wav,new_track_12.wav,/app/applet/demo_audios/new_track_12.wav,new_tag_12,0,
+new_track_15.wav,new_track_15.wav,/app/applet/demo_audios/new_track_15.wav,new_tag_15,0,

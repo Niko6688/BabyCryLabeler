@@ -35,6 +35,216 @@ async function startServer() {
   // Rate-limiting/deduplication map for playCount incrementing
   const lastPlayIncrementTimes: Record<string, number> = {};
 
+  // Memory-resident labeling progress data loaded from progress.json at startup
+  let progressMemory: Record<string, any> = {};
+
+  // Helper to normalize absolute paths to prevent any mismatch after restart
+  function normalizeAbsolutePath(p: string): string {
+    if (!p) return "";
+    if (p.startsWith("local-file://") || p.startsWith("blob:") || p.startsWith("[uploaded]")) {
+      return p;
+    }
+    // Standardize backslashes to forward slashes (cross-compatibility)
+    let normalized = p.replace(/\\/g, "/");
+    // Resolve relative path to absolute
+    normalized = path.resolve(normalized).replace(/\\/g, "/");
+    // Remove any trailing slashes (except root '/')
+    if (normalized.length > 1 && normalized.endsWith("/")) {
+      normalized = normalized.slice(0, -1);
+    }
+    // Convert drive letter to lowercase on Windows if present (e.g. C:/foo -> c:/foo)
+    if (/^[A-Za-z]:\//.test(normalized)) {
+      normalized = normalized.charAt(0).toLowerCase() + normalized.slice(1);
+    }
+    return normalized;
+  }
+
+  // Memory-resident CSV rows cache to avoid scanning and formatting the entire database repeatedly
+  const csvRowsCache = new Map<string, string>();
+
+  // Helper to format a single progress memory row into a CSV line
+  const formatRowToCsvLine = (key: string, item: any): string => {
+    let absPath = item.absolutePath || "";
+    if (key && !key.startsWith("[uploaded]") && !key.startsWith("local-file:") && !key.startsWith("blob:")) {
+      absPath = key;
+    }
+    if (absPath.startsWith("[uploaded]") && key && !key.startsWith("[uploaded]") && !key.startsWith("local-file:") && !key.startsWith("blob:")) {
+      absPath = key;
+    }
+    absPath = normalizeAbsolutePath(absPath);
+
+    let tagsArr: string[] = [];
+    const rawTags = item.tags || item.label || "";
+    if (Array.isArray(rawTags)) {
+      tagsArr = rawTags.map((t: any) => String(t).trim()).filter(Boolean);
+    } else if (typeof rawTags === "string") {
+      tagsArr = rawTags.split(",").map(t => t.trim()).filter(Boolean);
+    } else if (rawTags) {
+      tagsArr = [String(rawTags).trim()];
+    }
+    const tagsStr = tagsArr.join(",");
+
+    const playCount = typeof item.playCount === 'number' ? item.playCount : 0;
+    const lastPlayedAt = item.lastPlayedAt || "";
+
+    return [
+      escapeCsv(item.name || ""),
+      escapeCsv(item.rel || ""),
+      escapeCsv(absPath),
+      escapeCsv(tagsStr),
+      playCount,
+      escapeCsv(lastPlayedAt)
+    ].join(",");
+  };
+
+  // Sequential write queue to prevent all concurrent filesystem writes (especially during high concurrency)
+  const writeQueue: Array<() => Promise<void>> = [];
+  let isQueueProcessing = false;
+
+  const enqueueTask = (task: () => Promise<void>) => {
+    writeQueue.push(task);
+    processQueue();
+  };
+
+  const processQueue = async () => {
+    if (isQueueProcessing) return;
+    isQueueProcessing = true;
+    while (writeQueue.length > 0) {
+      const task = writeQueue.shift();
+      if (task) {
+        try {
+          await task();
+        } catch (err) {
+          console.error("[Write Queue] Error executing task:", err);
+        }
+      }
+    }
+    isQueueProcessing = false;
+  };
+
+  let rebuildBothTimer: NodeJS.Timeout | null = null;
+  let rebuildJsonTimer: NodeJS.Timeout | null = null;
+
+  const writeProgressImmediately = () => {
+    try {
+      const progressPath = path.join(process.cwd(), "progress.json");
+      const progressTmpPath = progressPath + ".tmp";
+      
+      // Deep copy progressMemory to prevent mutation during serialization
+      const dataToSave = JSON.parse(JSON.stringify(progressMemory));
+
+      // Write progress.json atomically immediately (critical data security, no queue, no debounce)
+      fs.writeFileSync(progressTmpPath, JSON.stringify(dataToSave, null, 2), "utf-8");
+      fs.renameSync(progressTmpPath, progressPath);
+      console.log(`[Immediate Write] progress.json written successfully. Entries: ${Object.keys(dataToSave).length}`);
+    } catch (err) {
+      console.error("[Immediate Write] Error writing progress.json:", err);
+    }
+  };
+
+  const triggerDebouncedBothRebuild = (delay: number) => {
+    // Both rebuild covers JSON rebuild too, so cancel any pending JSON-only rebuilds
+    if (rebuildJsonTimer) {
+      clearTimeout(rebuildJsonTimer);
+      rebuildJsonTimer = null;
+    }
+    if (rebuildBothTimer) {
+      clearTimeout(rebuildBothTimer);
+    }
+    rebuildBothTimer = setTimeout(() => {
+      enqueueTask(async () => {
+        rebuildCSVAndJSON();
+      });
+      rebuildBothTimer = null;
+    }, delay);
+  };
+
+  const triggerDebouncedJsonRebuild = (delay: number) => {
+    // If a full rebuild is already scheduled, we don't need to trigger a separate JSON-only rebuild
+    if (rebuildBothTimer) {
+      return;
+    }
+    if (rebuildJsonTimer) {
+      clearTimeout(rebuildJsonTimer);
+    }
+    rebuildJsonTimer = setTimeout(() => {
+      enqueueTask(async () => {
+        rebuildJSONOnly();
+      });
+      rebuildJsonTimer = null;
+    }, delay);
+  };
+
+  const handleProgressUpdate = (key: string, isNewEntry: boolean, opType: "new-tag" | "edit-tag" | "play-update") => {
+    // 1. Write progress.json IMMEDIATELY for data safety
+    writeProgressImmediately();
+
+    const item = progressMemory[key];
+    const csvLine = formatRowToCsvLine(key, item);
+    csvRowsCache.set(key, csvLine);
+
+    if (opType === "new-tag" && isNewEntry) {
+      // Incremental append optimization: append the new row directly to CSV via queue atomically without rebuilding the whole file
+      enqueueTask(async () => {
+        try {
+          const csvPath = path.join(process.cwd(), "labeled_output.csv");
+          const csvTmpPath = csvPath + ".tmp";
+          let existingContent = "";
+          if (fs.existsSync(csvPath)) {
+            existingContent = fs.readFileSync(csvPath, "utf-8");
+          } else {
+            existingContent = "\uFEFFname,rel,absolutePath,tags,playCount,lastPlayedAt\n";
+          }
+          if (existingContent && !existingContent.endsWith("\n")) {
+            existingContent += "\n";
+          }
+          const newContent = existingContent + csvLine + "\n";
+          fs.writeFileSync(csvTmpPath, newContent, "utf-8");
+          fs.renameSync(csvTmpPath, csvPath);
+          console.log(`[Queue CSV Append] Atomically appended new tagged track: ${key}`);
+        } catch (err) {
+          console.error("[Queue CSV Append] Failed to append, falling back to full rebuild:", err);
+          rebuildCSVAndJSON();
+        }
+      });
+
+      // JSON must always be rebuilt completely, but we limit frequency with 300ms debounce
+      triggerDebouncedJsonRebuild(300);
+    } else if (opType === "new-tag") {
+      // Key existed, but got labeled. Rebuild BOTH with 300ms debounce.
+      triggerDebouncedBothRebuild(300);
+    } else if (opType === "edit-tag") {
+      // Editing an existing tag. Rebuild BOTH with 300ms debounce (per user instruction: "修改已有标注：防抖300ms后全量重建")
+      triggerDebouncedBothRebuild(300);
+    } else if (opType === "play-update") {
+      // Playbeat statistics update.
+      if (isNewEntry) {
+        enqueueTask(async () => {
+          try {
+            const csvPath = path.join(process.cwd(), "labeled_output.csv");
+            const csvTmpPath = csvPath + ".tmp";
+            let existingContent = "";
+            if (fs.existsSync(csvPath)) {
+              existingContent = fs.readFileSync(csvPath, "utf-8");
+            } else {
+              existingContent = "\uFEFFname,rel,absolutePath,tags,playCount,lastPlayedAt\n";
+            }
+            if (existingContent && !existingContent.endsWith("\n")) {
+              existingContent += "\n";
+            }
+            const newContent = existingContent + csvLine + "\n";
+            fs.writeFileSync(csvTmpPath, newContent, "utf-8");
+            fs.renameSync(csvTmpPath, csvPath);
+            console.log(`[Queue CSV Append] Automatically appended new play track: ${key}`);
+          } catch (err) {
+            console.error("[Queue CSV Append] Failed to append play track:", err);
+          }
+        });
+      }
+      triggerDebouncedBothRebuild(1000);
+    }
+  };
+
   // Middleware for parsing JSON and URL encoded bodies
   app.use((req, res, next) => {
     const isFiltered = req.url.startsWith('/api/update-playback-status') || 
@@ -204,16 +414,7 @@ async function startServer() {
 
   // --- API ROUTE: Get Labeling Progress ---
   app.get("/api/progress", (req, res) => {
-    const progressPath = path.join(process.cwd(), "progress.json");
-    if (fs.existsSync(progressPath)) {
-      try {
-        const content = fs.readFileSync(progressPath, "utf-8");
-        return res.json(JSON.parse(content));
-      } catch (err) {
-        return res.status(500).json({ error: "Failed to parse progress.json" });
-      }
-    }
-    return res.json({});
+    return res.json(progressMemory);
   });
 
   const escapeCsv = (str: string) => {
@@ -225,28 +426,30 @@ async function startServer() {
     return s;
   };
 
-  const rebuildResultFiles = (progressData: Record<string, any>) => {
+  const buildCSV = () => {
     const csvPath = path.join(process.cwd(), "labeled_output.csv");
-    const jsonPath = path.join(process.cwd(), "labeled_output.json");
+    const csvTmp = csvPath + ".tmp";
+    const headers = "name,rel,absolutePath,tags,playCount,lastPlayedAt";
+    const body = Array.from(csvRowsCache.values()).join("\n");
+    fs.writeFileSync(csvTmp, "\uFEFF" + headers + "\n" + (body ? body + "\n" : ""), "utf-8");
+    fs.renameSync(csvTmp, csvPath);
+  };
 
-    const rows = Object.entries(progressData)
+  const buildJSON = () => {
+    const jsonPath = path.join(process.cwd(), "labeled_output.json");
+    const rows = Object.entries(progressMemory)
       .filter(([key, item]) => item && item.name && item.name.trim() !== "")
       .map(([key, item]) => {
         let absPath = item.absolutePath || "";
-        
-        // If the key is a real absolute path, prioritize it so scanned tracks always show real absolute path
         if (key && !key.startsWith("[uploaded]") && !key.startsWith("local-file:") && !key.startsWith("blob:")) {
           absPath = key;
         }
-
         if (absPath.startsWith("[uploaded]") && key && !key.startsWith("[uploaded]") && !key.startsWith("local-file:") && !key.startsWith("blob:")) {
           absPath = key;
         }
+        absPath = normalizeAbsolutePath(absPath);
 
-        // Normalize tags to string array and string representation
-        let tagsStr = "";
         let tagsArr: string[] = [];
-        
         const rawTags = item.tags || item.label || "";
         if (Array.isArray(rawTags)) {
           tagsArr = rawTags.map((t: any) => String(t).trim()).filter(Boolean);
@@ -255,37 +458,17 @@ async function startServer() {
         } else if (rawTags) {
           tagsArr = [String(rawTags).trim()];
         }
-        tagsStr = tagsArr.join(",");
 
         return {
           name: item.name || "",
           rel: item.rel || "",
           absolutePath: absPath,
-          tagsStr: tagsStr,
           tagsArr: tagsArr,
           playCount: typeof item.playCount === 'number' ? item.playCount : 0,
           lastPlayedAt: item.lastPlayedAt || ""
         };
       });
 
-    const headers = "name,rel,absolutePath,tags,playCount,lastPlayedAt";
-    const body = rows.map(r => {
-      return [
-        escapeCsv(r.name),
-        escapeCsv(r.rel),
-        escapeCsv(r.absolutePath),
-        escapeCsv(r.tagsStr),
-        r.playCount,
-        escapeCsv(r.lastPlayedAt)
-      ].join(",");
-    }).join("\n");
-
-    fs.writeFileSync(csvPath, "\uFEFF" + headers + "\n" + body + "\n", "utf-8");
-
-    // Calculate root folder dynamically across 3 environments:
-    // 1. Path scanning mode: Extract root via absolutePath.slice(0, -rel.length)
-    // 2. Electron drag-and-drop: Extract root via finding the longest common parent directory
-    // 3. Web browser drag-and-drop: root = ""
     let root = "";
     const realRows = rows.filter(r => 
       r.absolutePath && 
@@ -305,7 +488,6 @@ async function startServer() {
           if (cand.endsWith("\\") && cand.length > 1) cand = cand.slice(0, -1);
           return cand;
         } else {
-          // Fallback: directory name of absolutePath
           const lastSlash = Math.max(abs.lastIndexOf("/"), abs.lastIndexOf("\\"));
           if (lastSlash > 0) {
             return abs.slice(0, lastSlash);
@@ -314,7 +496,6 @@ async function startServer() {
         }
       });
 
-      // Find the robust longest common parent directory path segments
       if (candidateRoots.length > 0) {
         const splitPaths = candidateRoots.map(p => p.split(/[/\\]/));
         let commonSegments: string[] = [];
@@ -343,7 +524,6 @@ async function startServer() {
       root = "";
     }
 
-    // Map tags to string arrays in JSON, strictly retaining only the 6 requested fields in exact order
     const jsonItems = rows.map(r => {
       return {
         name: r.name,
@@ -362,17 +542,42 @@ async function startServer() {
       items: jsonItems
     };
 
-    fs.writeFileSync(jsonPath, JSON.stringify(jsonOutput, null, 2), "utf-8");
+    const jsonTmp = jsonPath + ".tmp";
+    fs.writeFileSync(jsonTmp, JSON.stringify(jsonOutput, null, 2), "utf-8");
+    fs.renameSync(jsonTmp, jsonPath);
+  };
+
+  const rebuildCSVAndJSON = () => {
+    try {
+      buildCSV();
+      buildJSON();
+      console.log(`[Rebuild] Successfully rebuilt CSV and JSON. Entries count: ${Object.keys(progressMemory).length}`);
+    } catch (err) {
+      console.error("[Rebuild] Error rebuilding result files:", err);
+    }
+  };
+
+  const rebuildJSONOnly = () => {
+    try {
+      buildJSON();
+      console.log(`[Rebuild] Successfully rebuilt JSON only. Entries count: ${Object.keys(progressMemory).length}`);
+    } catch (err) {
+      console.error("[Rebuild] Error rebuilding JSON only:", err);
+    }
+  };
+
+  const rebuildResultFiles = (progressData: Record<string, any>) => {
+    rebuildCSVAndJSON();
   };
 
   const getUnifiedKey = (filePath: string, fileName?: string): string => {
     if (!filePath) return "";
-    if (filePath.startsWith("local-file://") || filePath.startsWith("blob:")) {
+    if (filePath.startsWith("local-file://") || filePath.startsWith("blob:") || filePath.startsWith("[uploaded]")) {
       const name = fileName || path.basename(filePath.replace("local-file://", ""));
       return `${UPLOADED_PREFIX}${name}`;
     }
     const cleanedPath = getSafePath(filePath) || path.resolve(filePath);
-    return cleanedPath;
+    return normalizeAbsolutePath(cleanedPath);
   };
 
   const recordTrackPlayback = (filePath: string, fileName?: string, relativePath?: string, clientAbsolutePath?: string): Record<string, any> => {
@@ -394,17 +599,20 @@ async function startServer() {
       }
     }
 
+    // Apply path standardization
+    absolutePathVal = normalizeAbsolutePath(absolutePathVal);
+
     const progressPath = path.join(process.cwd(), "progress.json");
-    let progressData: Record<string, any> = {};
-    if (fs.existsSync(progressPath)) {
+    if (Object.keys(progressMemory).length === 0 && fs.existsSync(progressPath)) {
       try {
-        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+        progressMemory = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
       } catch (err) {
         // ignore
       }
     }
 
-    const currentEntry = progressData[key] || {};
+    const currentEntry = progressMemory[key] || {};
+    const isNewEntry = !progressMemory[key];
     
     // 5-second rate-limiting window per track to prevent double counting
     const now = Date.now();
@@ -420,7 +628,7 @@ async function startServer() {
       lastPlayedAt = new Date().toISOString();
     }
 
-    progressData[key] = {
+    progressMemory[key] = {
       ...currentEntry,
       label: currentEntry.label || "",
       time: currentEntry.time || "",
@@ -432,10 +640,10 @@ async function startServer() {
       lastPlayedAt: lastPlayedAt
     };
 
-    fs.writeFileSync(progressPath, JSON.stringify(progressData, null, 2), "utf-8");
-    rebuildResultFiles(progressData);
+    // Use our highly optimized handleProgressUpdate
+    handleProgressUpdate(key, isNewEntry, "play-update");
 
-    return progressData;
+    return progressMemory;
   };
 
   // --- API ROUTE: Save Label / Update CSV and progress.json ---
@@ -463,23 +671,30 @@ async function startServer() {
       }
     }
 
+    // Apply path standardization
+    absolutePathVal = normalizeAbsolutePath(absolutePathVal);
+
     const timeString = labelTime || new Date().toISOString().replace("T", " ").substring(0, 19);
 
     // 1. Update progress.json
     const progressPath = path.join(process.cwd(), "progress.json");
-    let progressData: Record<string, any> = {};
-    if (fs.existsSync(progressPath)) {
+    if (Object.keys(progressMemory).length === 0 && fs.existsSync(progressPath)) {
       try {
-        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+        progressMemory = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
       } catch (err) {
         // ignore and overwrite on error
       }
     }
 
-    const currentEntry = progressData[key] || {};
-    
+    const currentEntry = progressMemory[key] || {};
+    const isNewEntry = !progressMemory[key];
+    const hadLabelBefore = !!(currentEntry.label || currentEntry.tags);
+    const opType = isNewEntry 
+      ? "new-tag" 
+      : (hadLabelBefore ? "edit-tag" : "new-tag");
+
     // MERGE logic: preserve existing playCount and lastPlayedAt
-    progressData[key] = {
+    progressMemory[key] = {
       ...currentEntry,
       label: label,
       time: timeString,
@@ -491,12 +706,10 @@ async function startServer() {
       lastPlayedAt: currentEntry.lastPlayedAt || ""
     };
     
-    fs.writeFileSync(progressPath, JSON.stringify(progressData, null, 2), "utf-8");
+    // 2. Use our highly optimized handleProgressUpdate
+    handleProgressUpdate(key, isNewEntry, opType);
 
-    // 2. Rebuild CSV and JSON outputs
-    rebuildResultFiles(progressData);
-
-    res.json({ success: true, progress: progressData });
+    res.json({ success: true, progress: progressMemory });
   });
 
   // --- API ROUTE: Bulk Sync / Restore Progress from Client localStorage Backup ---
@@ -507,10 +720,9 @@ async function startServer() {
     }
 
     const progressPath = path.join(process.cwd(), "progress.json");
-    let progressData: Record<string, any> = {};
-    if (fs.existsSync(progressPath)) {
+    if (Object.keys(progressMemory).length === 0 && fs.existsSync(progressPath)) {
       try {
-        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+        progressMemory = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
       } catch (err) {
         // ignore and overwrite on error
       }
@@ -520,7 +732,11 @@ async function startServer() {
     Object.entries(clientProgress).forEach(([key, val]) => {
       if (val && typeof val === "object") {
         const clientEntry = val as any;
-        const serverEntry = progressData[key] || {};
+        const normalizedKey = key.startsWith("local-file:") || key.startsWith("blob:") || key.startsWith("[uploaded]")
+          ? key 
+          : normalizeAbsolutePath(key);
+
+        const serverEntry = progressMemory[normalizedKey] || {};
         
         // Merge preferring non-empty labels and higher play counts
         const mergedLabel = clientEntry.label || serverEntry.label || "";
@@ -532,7 +748,12 @@ async function startServer() {
         const mergedLastPlayedAt = clientEntry.lastPlayedAt || serverEntry.lastPlayedAt || "";
         const mergedTime = clientEntry.time || serverEntry.time || "";
 
-        progressData[key] = {
+        const rawClientAbsPath = clientEntry.absolutePath || serverEntry.absolutePath || "";
+        const normalizedClientAbsPath = rawClientAbsPath.startsWith("local-file:") || rawClientAbsPath.startsWith("blob:") || rawClientAbsPath.startsWith("[uploaded]")
+          ? rawClientAbsPath
+          : normalizeAbsolutePath(rawClientAbsPath);
+
+        const mergedEntry = {
           ...serverEntry,
           ...clientEntry,
           label: mergedLabel,
@@ -542,15 +763,23 @@ async function startServer() {
           time: mergedTime,
           name: clientEntry.name || serverEntry.name || "",
           rel: clientEntry.rel || serverEntry.rel || "",
-          absolutePath: clientEntry.absolutePath || serverEntry.absolutePath || ""
+          absolutePath: normalizedClientAbsPath
         };
+
+        progressMemory[normalizedKey] = mergedEntry;
+
+        // Update the in-memory cache for this synchronized entry
+        csvRowsCache.set(normalizedKey, formatRowToCsvLine(normalizedKey, mergedEntry));
       }
     });
 
-    fs.writeFileSync(progressPath, JSON.stringify(progressData, null, 2), "utf-8");
-    rebuildResultFiles(progressData);
+    // Write progress.json immediately for data durability
+    writeProgressImmediately();
 
-    res.json({ success: true, progress: progressData });
+    // Trigger debounced rebuild of CSV and JSON files (500ms since it's a bulk sync)
+    triggerDebouncedBothRebuild(500);
+
+    res.json({ success: true, progress: progressMemory });
   });
 
   // --- API ROUTE: Record Playback Completion ---
@@ -565,16 +794,7 @@ async function startServer() {
 
   // --- API ROUTE: Get Raw CSV Content ---
   app.get("/api/download-csv", (req, res) => {
-    const progressPath = path.join(process.cwd(), "progress.json");
-    let progressData: Record<string, any> = {};
-    if (fs.existsSync(progressPath)) {
-      try {
-        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
-      } catch (err) {
-        // ignore
-      }
-    }
-    rebuildResultFiles(progressData);
+    rebuildResultFiles(progressMemory);
 
     const csvPath = path.join(process.cwd(), "labeled_output.csv");
     if (!fs.existsSync(csvPath)) {
@@ -595,16 +815,7 @@ async function startServer() {
 
   // --- API ROUTE: Get Raw JSON Content ---
   app.get("/api/download-json", (req, res) => {
-    const progressPath = path.join(process.cwd(), "progress.json");
-    let progressData: Record<string, any> = {};
-    if (fs.existsSync(progressPath)) {
-      try {
-        progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
-      } catch (err) {
-        // ignore
-      }
-    }
-    rebuildResultFiles(progressData);
+    rebuildResultFiles(progressMemory);
 
     const jsonPath = path.join(process.cwd(), "labeled_output.json");
     if (!fs.existsSync(jsonPath)) {
@@ -715,54 +926,53 @@ async function startServer() {
     const progressFilePath = path.join(process.cwd(), "progress.json");
     const jsonPath = path.join(process.cwd(), "labeled_output.json");
     try {
-      // Read current progress before resetting for debugging
-      let progress: Record<string, any> = {};
-      if (fs.existsSync(progressFilePath)) {
-        try {
-          progress = JSON.parse(fs.readFileSync(progressFilePath, "utf-8"));
-        } catch (err) {
-          progress = {};
-        }
+      // Clear the memory variable and reset the write queue and locks to prevent conflicts
+      const beforeKeys = Object.keys(progressMemory);
+      progressMemory = {};
+      csvRowsCache.clear();
+      if (rebuildBothTimer) {
+        clearTimeout(rebuildBothTimer);
+        rebuildBothTimer = null;
       }
-
-      // 重置前
-      console.log('BEFORE reset:', JSON.stringify(progress));
-
-      // 在重置前先保存 key 列表
-      const beforeKeys = Object.keys(progress);
-
-      // 执行清空
-      Object.keys(progress).forEach(k => delete progress[k]);
-      fs.writeFileSync(progressFilePath, '{}', 'utf-8');
-
-      // 重置后立刻读取文件确认
-      const verify = fs.readFileSync(progressFilePath, 'utf-8');
-      console.log('AFTER reset, file content:', verify);
-      console.log('AFTER reset, memory:', JSON.stringify(progress));
+      if (rebuildJsonTimer) {
+        clearTimeout(rebuildJsonTimer);
+        rebuildJsonTimer = null;
+      }
+      writeQueue.length = 0;
+      isQueueProcessing = false;
 
       // Clear the rate-limiting map
       for (const k of Object.keys(lastPlayIncrementTimes)) {
         delete lastPlayIncrementTimes[k];
       }
 
-      // 2. Reset labeled_output.csv to headers only (with UTF-8 BOM)
-      const headers = "\uFEFFname,rel,absolutePath,tags,playCount,lastPlayedAt\n";
-      fs.writeFileSync(csvPath, headers, "utf-8");
+      // Write progress.json atomically
+      const progressTmp = progressFilePath + ".tmp";
+      fs.writeFileSync(progressTmp, '{}', 'utf-8');
+      fs.renameSync(progressTmp, progressFilePath);
 
-      // 3. Reset labeled_output.json to the target empty template
+      // 2. Reset labeled_output.csv to headers only (with UTF-8 BOM) atomically
+      const headers = "\uFEFFname,rel,absolutePath,tags,playCount,lastPlayedAt\n";
+      const csvTmp = csvPath + ".tmp";
+      fs.writeFileSync(csvTmp, headers, "utf-8");
+      fs.renameSync(csvTmp, csvPath);
+
+      // 3. Reset labeled_output.json to the target empty template atomically
       const emptyTemplate = {
         exportedAt: "",
         root: "",
         count: 0,
         items: []
       };
-      fs.writeFileSync(jsonPath, JSON.stringify(emptyTemplate, null, 2), "utf-8");
+      const jsonTmp = jsonPath + ".tmp";
+      fs.writeFileSync(jsonTmp, JSON.stringify(emptyTemplate, null, 2), "utf-8");
+      fs.renameSync(jsonTmp, jsonPath);
 
       res.json({ 
         success: true,
-        beforeKeys: beforeKeys,    // 重置前的所有 key
-        afterContent: verify,      // 重置后文件内容
-        afterMemoryKeys: Object.keys(progress)  // 重置后内存的 key
+        beforeKeys: beforeKeys,
+        afterContent: '{}',
+        afterMemoryKeys: []
       });
     } catch (e) {
       console.error("Failed to clear state files:", e);
@@ -915,13 +1125,68 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
+
+    // Clean up any dangling temporary files on startup
+    const tmpFilesToClean = [
+      path.join(process.cwd(), "progress.json.tmp"),
+      path.join(process.cwd(), "labeled_output.csv.tmp"),
+      path.join(process.cwd(), "labeled_output.json.tmp")
+    ];
+    tmpFilesToClean.forEach(tmpFile => {
+      if (fs.existsSync(tmpFile)) {
+        try {
+          fs.unlinkSync(tmpFile);
+          console.log(`[Startup Cleanup] Deleted orphaned temp file: ${tmpFile}`);
+        } catch (err) {
+          console.error(`[Startup Cleanup] Failed to delete temp file ${tmpFile}:`, err);
+        }
+      }
+    });
+
     // Sanitize and rebuild export files (CSV, JSON) using latest schema rules on startup
     const progressPath = path.join(process.cwd(), "progress.json");
     if (fs.existsSync(progressPath)) {
       try {
-        const progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
-        rebuildResultFiles(progressData);
-        console.log("[Startup] Successfully rebuilt labeled_output.csv and labeled_output.json using the standardized 6-field schema.");
+        const rawMemory = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+        
+        // Normalize keys and absolutePath attributes in progressMemory on startup to prevent mismatch
+        const normalizedMemory: Record<string, any> = {};
+        Object.entries(rawMemory).forEach(([key, val]) => {
+          if (val && typeof val === "object") {
+            const entry = val as any;
+            const normalizedKey = key.startsWith("local-file:") || key.startsWith("blob:") || key.startsWith("[uploaded]")
+              ? key
+              : normalizeAbsolutePath(key);
+            
+            const rawAbsPath = entry.absolutePath || "";
+            const normalizedAbs = rawAbsPath.startsWith("local-file:") || rawAbsPath.startsWith("blob:") || rawAbsPath.startsWith("[uploaded]")
+              ? rawAbsPath
+              : normalizeAbsolutePath(rawAbsPath);
+
+            normalizedMemory[normalizedKey] = {
+              ...entry,
+              absolutePath: normalizedAbs
+            };
+          }
+        });
+
+        progressMemory = normalizedMemory;
+        
+        // Populate the in-memory CSV rows cache with the normalized startup entries
+        csvRowsCache.clear();
+        Object.entries(progressMemory).forEach(([key, val]) => {
+          if (val && typeof val === "object") {
+            csvRowsCache.set(key, formatRowToCsvLine(key, val));
+          }
+        });
+        
+        // Write normalized memory back to progress.json atomically
+        const tmpFile = progressPath + ".tmp";
+        fs.writeFileSync(tmpFile, JSON.stringify(progressMemory, null, 2), "utf-8");
+        fs.renameSync(tmpFile, progressPath);
+
+        rebuildCSVAndJSON();
+        console.log(`[Startup] Successfully loaded, normalized progress.json, populated cache, and rebuilt result files (${Object.keys(progressMemory).length} entries).`);
       } catch (e) {
         console.error("[Startup] Failed to rebuild result files:", e);
       }
