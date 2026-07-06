@@ -181,9 +181,13 @@ async function startServer() {
 
     const item = progressMemory[key];
     const csvLine = formatRowToCsvLine(key, item);
+    
+    // Check if the key already exists in our CSV rows cache BEFORE updating it
+    const keyAlreadyExistsInCsv = csvRowsCache.has(key);
+    
     csvRowsCache.set(key, csvLine);
 
-    if (opType === "new-tag" && isNewEntry) {
+    if (opType === "new-tag" && !keyAlreadyExistsInCsv) {
       // Incremental append optimization: append the new row directly to CSV via queue atomically without rebuilding the whole file
       enqueueTask(async () => {
         try {
@@ -218,7 +222,7 @@ async function startServer() {
       triggerDebouncedBothRebuild(300);
     } else if (opType === "play-update") {
       // Playbeat statistics update.
-      if (isNewEntry) {
+      if (!keyAlreadyExistsInCsv) {
         enqueueTask(async () => {
           try {
             const csvPath = path.join(process.cwd(), "labeled_output.csv");
@@ -1149,11 +1153,21 @@ async function startServer() {
       try {
         const rawMemory = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
         
-        // Normalize keys and absolutePath attributes in progressMemory on startup to prevent mismatch
+        // Normalize keys and absolutePath attributes in progressMemory on startup to prevent mismatch, filtering out any test data
         const normalizedMemory: Record<string, any> = {};
         Object.entries(rawMemory).forEach(([key, val]) => {
           if (val && typeof val === "object") {
             const entry = val as any;
+            
+            const name = entry.name || "";
+            const absPath = entry.absolutePath || "";
+            const isTest = absPath.includes("/app/applet/") || name.includes("new_track_");
+            
+            if (isTest) {
+              console.log(`[Startup Cleanup] Discarding test data: key=${key}, name=${name}, path=${absPath}`);
+              return; // Filter out/skip test entries
+            }
+
             const normalizedKey = key.startsWith("local-file:") || key.startsWith("blob:") || key.startsWith("[uploaded]")
               ? key
               : normalizeAbsolutePath(key);
