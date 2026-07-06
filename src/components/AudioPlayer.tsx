@@ -234,6 +234,7 @@ export default function AudioPlayer({
       if (elapsed >= totalRequiredTime) {
         stopWebAudio();
         setIsPlaying(false);
+        console.log('Track ended, moving to next...');
         onTrackEnd();
         return;
       }
@@ -324,15 +325,27 @@ export default function AudioPlayer({
         playWebAudio();
       } else {
         stopWebAudio();
-        audioRef.current.play().catch(() => {
-          setIsPlaying(false);
-        });
+        // Only call play() if the audio element has loaded enough data (readyState >= 2)
+        if (audioRef.current.readyState >= 2) {
+          if (audioRef.current.paused) {
+            audioRef.current.play().catch((err) => {
+              console.error("Audio play failed error details:", err);
+              if (err && err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
+                setIsPlaying(false);
+              }
+            });
+          }
+        } else {
+          console.log("Audio not ready yet (readyState < 2), waiting for loadedmetadata/onCanPlay to trigger play");
+        }
       }
     } else {
-      audioRef.current.pause();
+      if (!audioRef.current.paused) {
+        audioRef.current.pause();
+      }
       pauseWebAudio();
     }
-  }, [isPlaying, isWaitingInterval, duration]);
+  }, [isPlaying, isWaitingInterval, duration, currentFile]);
 
   // Audio metadata loaded handler
   const handleLoadedMetadata = () => {
@@ -352,6 +365,20 @@ export default function AudioPlayer({
     const minRequiredDuration = 30;
     const needed = Math.ceil(minRequiredDuration / fileDuration);
     setLoopsNeeded(needed > 0 ? needed : 1);
+
+    // Auto play if isPlaying is true and not in waiting interval
+    if (isPlaying && !isWaitingInterval) {
+      console.log("Audio metadata loaded/canplay, triggering safe play. readyState:", audioRef.current.readyState);
+      stopWebAudio();
+      if (audioRef.current.paused) {
+        audioRef.current.play().catch((err) => {
+          console.error("Audio play in handleLoadedMetadata failed error details:", err);
+          if (err && err.name !== 'AbortError' && err.name !== 'NotAllowedError') {
+            setIsPlaying(false);
+          }
+        });
+      }
+    }
   };
 
   // Monitor playback details
@@ -384,9 +411,15 @@ export default function AudioPlayer({
       setCurrentLoop(prev => prev + 1);
       setAccumulatedPlayTime(prev => prev + duration);
       audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => setIsPlaying(false));
+      audioRef.current.play().catch((err) => {
+        console.error("Audio loop play failed error details:", err);
+        if (err && err.name !== 'AbortError') {
+          setIsPlaying(false);
+        }
+      });
     } else {
       // Fully completed the required sequential length
+      console.log('Track ended, moving to next...');
       onTrackEnd();
     }
   };

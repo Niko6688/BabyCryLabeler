@@ -47,13 +47,16 @@ async function startServer() {
     }
     next();
   });
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // Helper to prevent path traversal / directory escaping
   function getSafePath(inputPath: string): string | null {
     if (!inputPath) return null;
     const resolved = path.resolve(inputPath);
+    if (fs.existsSync(resolved)) {
+      return resolved;
+    }
     const workspaceRoot = path.resolve(process.cwd());
     const originalRoot = path.resolve(currentDirname);
     if (resolved.startsWith(workspaceRoot) || resolved.startsWith(originalRoot)) {
@@ -226,14 +229,40 @@ async function startServer() {
     const csvPath = path.join(process.cwd(), "labeled_output.csv");
     const jsonPath = path.join(process.cwd(), "labeled_output.json");
 
-    const rows = Object.values(progressData)
-      .filter(item => item && item.name && item.name.trim() !== "")
-      .map(item => {
+    const rows = Object.entries(progressData)
+      .filter(([key, item]) => item && item.name && item.name.trim() !== "")
+      .map(([key, item]) => {
+        let absPath = item.absolutePath || "";
+        
+        // If the key is a real absolute path, prioritize it so scanned tracks always show real absolute path
+        if (key && !key.startsWith("[uploaded]") && !key.startsWith("local-file:") && !key.startsWith("blob:")) {
+          absPath = key;
+        }
+
+        if (absPath.startsWith("[uploaded]") && key && !key.startsWith("[uploaded]") && !key.startsWith("local-file:") && !key.startsWith("blob:")) {
+          absPath = key;
+        }
+
+        // Normalize tags to string array and string representation
+        let tagsStr = "";
+        let tagsArr: string[] = [];
+        
+        const rawTags = item.tags || item.label || "";
+        if (Array.isArray(rawTags)) {
+          tagsArr = rawTags.map((t: any) => String(t).trim()).filter(Boolean);
+        } else if (typeof rawTags === "string") {
+          tagsArr = rawTags.split(",").map(t => t.trim()).filter(Boolean);
+        } else if (rawTags) {
+          tagsArr = [String(rawTags).trim()];
+        }
+        tagsStr = tagsArr.join(",");
+
         return {
           name: item.name || "",
           rel: item.rel || "",
-          absolutePath: item.absolutePath || "",
-          tags: item.tags || item.label || "",
+          absolutePath: absPath,
+          tagsStr: tagsStr,
+          tagsArr: tagsArr,
           playCount: typeof item.playCount === 'number' ? item.playCount : 0,
           lastPlayedAt: item.lastPlayedAt || ""
         };
@@ -245,7 +274,7 @@ async function startServer() {
         escapeCsv(r.name),
         escapeCsv(r.rel),
         escapeCsv(r.absolutePath),
-        escapeCsv(r.tags),
+        escapeCsv(r.tagsStr),
         r.playCount,
         escapeCsv(r.lastPlayedAt)
       ].join(",");
@@ -314,24 +343,13 @@ async function startServer() {
       root = "";
     }
 
-    // Map tags to string arrays in JSON
+    // Map tags to string arrays in JSON, strictly retaining only the 6 requested fields in exact order
     const jsonItems = rows.map(r => {
-      let tagsArray: string[] = [];
-      if (r.tags) {
-        if (Array.isArray(r.tags)) {
-          tagsArray = r.tags.map((t: any) => String(t).trim()).filter(Boolean);
-        } else {
-          tagsArray = String(r.tags)
-            .split(",")
-            .map(t => t.trim())
-            .filter(Boolean);
-        }
-      }
       return {
         name: r.name,
         rel: r.rel,
         absolutePath: r.absolutePath,
-        tags: tagsArray,
+        tags: r.tagsArr,
         playCount: r.playCount,
         lastPlayedAt: r.lastPlayedAt
       };
@@ -562,8 +580,16 @@ async function startServer() {
     if (!fs.existsSync(csvPath)) {
       return res.status(404).send("labeled_output.csv not found.");
     }
+
+    const now = new Date();
+    const iso = now.toISOString();
+    const timestamp = iso
+      .replace(/:/g, '-')
+      .replace('.', '-');
+    const csvFilename = `auto-play-export-${timestamp}.csv`;
+
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", "attachment; filename=labeled_output.csv");
+    res.setHeader("Content-Disposition", `attachment; filename=${csvFilename}`);
     res.sendFile(csvPath);
   });
 
@@ -584,8 +610,16 @@ async function startServer() {
     if (!fs.existsSync(jsonPath)) {
       return res.status(404).send("labeled_output.json not found.");
     }
+
+    const now = new Date();
+    const iso = now.toISOString();
+    const timestamp = iso
+      .replace(/:/g, '-')
+      .replace('.', '-');
+    const jsonFilename = `auto-play-export-${timestamp}.json`;
+
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Content-Disposition", "attachment; filename=labeled_output.json");
+    res.setHeader("Content-Disposition", `attachment; filename=${jsonFilename}`);
     res.sendFile(jsonPath);
   });
 
@@ -881,6 +915,17 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
+    // Sanitize and rebuild export files (CSV, JSON) using latest schema rules on startup
+    const progressPath = path.join(process.cwd(), "progress.json");
+    if (fs.existsSync(progressPath)) {
+      try {
+        const progressData = JSON.parse(fs.readFileSync(progressPath, "utf-8"));
+        rebuildResultFiles(progressData);
+        console.log("[Startup] Successfully rebuilt labeled_output.csv and labeled_output.json using the standardized 6-field schema.");
+      } catch (e) {
+        console.error("[Startup] Failed to rebuild result files:", e);
+      }
+    }
   });
 }
 

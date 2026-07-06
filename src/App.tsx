@@ -85,10 +85,11 @@ export default function App() {
 
   // Sync state modifications into browser's persistent localStorage instantly
   useEffect(() => {
-    if (backendProgress && Object.keys(backendProgress).length > 0) {
-      localStorage.setItem('baby_cry_progress_backup', JSON.stringify(backendProgress));
+    if (progress && Object.keys(progress).length > 0) {
+      localStorage.setItem('progress_backup', JSON.stringify(progress));
+      localStorage.setItem('baby_cry_progress_backup', JSON.stringify(progress));
     }
-  }, [backendProgress]);
+  }, [progress]);
 
   // Path configurations
   const [scannedPath, setScannedPath] = useState<string>(() => {
@@ -128,6 +129,27 @@ export default function App() {
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isScanningRef = useRef(false);
 
+  // Unexported data state
+  const [hasUnexportedData, setHasUnexportedData] = useState<boolean>(false);
+
+  // Handle warning before closing page
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnexportedData) {
+        e.preventDefault();
+        const msg = lang === 'zh'
+          ? '您有未导出的标注数据，建议先导出后再关闭页面'
+          : 'You have unexported labeling data. It is recommended to export before closing the page.';
+        e.returnValue = msg;
+        return msg;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [hasUnexportedData, lang]);
+
   // Load progress.json on app creation
   useEffect(() => {
     fetchProgress();
@@ -157,6 +179,7 @@ export default function App() {
 
   // Handle waiting interval counter decrements
   useEffect(() => {
+    console.log('[IntervalEffect] isWaitingInterval changed:', isWaitingInterval, 'waitingSecondsLeft:', waitingSecondsLeft);
     if (isWaitingInterval) {
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = setInterval(() => {
@@ -309,7 +332,7 @@ export default function App() {
 
     // 1. Try reading from client-side localStorage backup first
     try {
-      const saved = localStorage.getItem('baby_cry_progress_backup');
+      const saved = localStorage.getItem('progress_backup') || localStorage.getItem('baby_cry_progress_backup');
       if (saved) {
         localBackup = JSON.parse(saved);
       }
@@ -357,7 +380,7 @@ export default function App() {
         });
 
         setBackendProgress(merged);
-        localStorage.setItem('baby_cry_progress_backup', JSON.stringify(merged));
+        localStorage.setItem('progress_backup', JSON.stringify(merged));
 
         // 3. If there's any discrepancy where local backup has more files or details, sync back to backend
         const needsSync = Object.keys(merged).length > Object.keys(backendData).length || 
@@ -605,6 +628,7 @@ export default function App() {
 
   // Triggered when a track has finished playback loops
   const handleTrackCompletedPlayback = async () => {
+    console.log('handleTrackCompletedPlayback triggered for file:', currentFile?.name);
     if (currentFile) {
       let res: Response | null = null;
       try {
@@ -763,7 +787,12 @@ export default function App() {
     }
 
     if (nextTrack) {
+      console.log('loadNextUnlabeledTrack selected track:', nextTrack.name);
+      console.log('Setting current file to:', nextTrack.name);
       setCurrentFile(nextTrack);
+      console.log('isPlaying after set:', isPlaying);
+    } else {
+      console.log('loadNextUnlabeledTrack found no next track');
     }
   };
 
@@ -785,8 +814,10 @@ export default function App() {
 
   // Called when wait countdown finishes naturally without any label submittal
   const handleCountdownCompleted = () => {
+    console.log('handleCountdownCompleted triggered, switching to next track');
     setIsWaitingInterval(false);
     loadNextUnlabeledTrack();
+    setIsPlaying(true);
   };
 
   // Save label results to backend database
@@ -809,6 +840,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setBackendProgress(data.progress);
+        setHasUnexportedData(true);
 
         // Terminate waiting sequence immediately upon receiving label, and proceed to next track!
         setIsWaitingInterval(false);
@@ -848,6 +880,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setBackendProgress(data.progress);
+        setHasUnexportedData(true);
       } else {
         if (res.body) await res.body.cancel();
         console.error("Save label for path failed");
@@ -968,6 +1001,9 @@ export default function App() {
             onUploadLocalAudios={handleUploadLocalAudios}
             intervalSeconds={intervalSeconds}
             setIntervalSeconds={setIntervalSeconds}
+            onExportCSV={() => setHasUnexportedData(false)}
+            onExportJSON={() => setHasUnexportedData(false)}
+            hasUnexportedData={hasUnexportedData}
           />
 
           <QueueList

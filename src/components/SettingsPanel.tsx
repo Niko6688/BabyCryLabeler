@@ -22,6 +22,9 @@ interface SettingsPanelProps {
   onUploadLocalAudios?: (files: File[], isDragAndDrop?: boolean) => void;
   intervalSeconds: number;
   setIntervalSeconds: (seconds: number) => void;
+  onExportCSV?: () => void;
+  onExportJSON?: () => void;
+  hasUnexportedData?: boolean;
 }
 
 export default function SettingsPanel({
@@ -38,7 +41,10 @@ export default function SettingsPanel({
   unlabeledCount,
   onUploadLocalAudios,
   intervalSeconds,
-  setIntervalSeconds
+  setIntervalSeconds,
+  onExportCSV,
+  onExportJSON,
+  hasUnexportedData
  }: SettingsPanelProps) {
   const t = getTranslations(lang);
   
@@ -522,16 +528,30 @@ export default function SettingsPanel({
         <div className="grid grid-cols-2 gap-2">
           <a
             href="/api/download-csv"
-            className="flex items-center justify-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-100 rounded-lg p-2.5 text-xs font-semibold transition-all shadow-2xs hover:shadow-xs"
+            onClick={() => onExportCSV?.()}
+            className="relative flex items-center justify-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-100 rounded-lg p-2.5 text-xs font-semibold transition-all shadow-2xs hover:shadow-xs animate-none"
           >
+            {hasUnexportedData && (
+              <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+              </span>
+            )}
             <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
             <span>{lang === 'zh' ? '导出 CSV 标签' : 'Export CSV Labels'}</span>
           </a>
 
           <a
             href="/api/download-json"
-            className="flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded-lg p-2.5 text-xs font-semibold transition-all shadow-2xs hover:shadow-xs"
+            onClick={() => onExportJSON?.()}
+            className="relative flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded-lg p-2.5 text-xs font-semibold transition-all shadow-2xs hover:shadow-xs"
           >
+            {hasUnexportedData && (
+              <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+              </span>
+            )}
             <FileJson className="w-4 h-4 text-indigo-500" />
             <span>{lang === 'zh' ? '导出 JSON 标签' : 'Export JSON Labels'}</span>
           </a>
