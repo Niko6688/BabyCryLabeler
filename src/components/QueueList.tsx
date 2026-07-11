@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { PlayCircle, CheckCircle2, RotateCcw, Award, Music, Shuffle, AlignLeft, Layers, Volume, Trash2 } from 'lucide-react';
 import { AudioFile, ProgressData, LABELS } from '../types';
 import { createTempLocalFileUrl } from '../lib/localFilesRegistry';
@@ -88,19 +88,21 @@ export default function QueueList({
     }
   });
 
-  // Filter queues
-  const filteredFiles = files.filter(f => {
-    // 1. Searched name match
-    const matchesSearch = f.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          f.relativePath.toLowerCase().includes(searchTerm.toLowerCase());
-    if (!matchesSearch) return false;
+  // Filter queues - Memoized to prevent heavy re-filtering and identity changes on every render
+  const filteredFiles = useMemo(() => {
+    return files.filter(f => {
+      // 1. Searched name match
+      const matchesSearch = f.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            f.relativePath.toLowerCase().includes(searchTerm.toLowerCase());
+      if (!matchesSearch) return false;
 
-    // 2. Filter selection
-    const isLabeled = progress[f.path]?.label !== undefined && progress[f.path]?.label !== "";
-    if (filterType === 'unlabeled') return !isLabeled;
-    if (filterType === 'labeled') return isLabeled;
-    return true;
-  });
+      // 2. Filter selection
+      const isLabeled = progress[f.path]?.label !== undefined && progress[f.path]?.label !== "";
+      if (filterType === 'unlabeled') return !isLabeled;
+      if (filterType === 'labeled') return isLabeled;
+      return true;
+    });
+  }, [files, searchTerm, filterType, progress]);
 
   // Pagination engine for massive audio scales (e.g. 20000+ items)
   const [currentPage, setCurrentPage] = useState(1);
@@ -111,10 +113,21 @@ export default function QueueList({
   }, [searchTerm, filterType]);
 
   const totalFilteredCount = filteredFiles.length;
-  const totalPages = Math.max(1, Math.ceil(totalFilteredCount / itemsPerPage));
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(totalFilteredCount / itemsPerPage)), [totalFilteredCount, itemsPerPage]);
   const activePage = Math.min(currentPage, totalPages);
   const startIndex = (activePage - 1) * itemsPerPage;
-  const paginatedFiles = filteredFiles.slice(startIndex, startIndex + itemsPerPage);
+
+  // Memoize paginated slice to ensure stable array identity when contents don't change
+  const paginatedFiles = useMemo(() => {
+    return filteredFiles.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredFiles, startIndex, itemsPerPage]);
+
+  // A stringified representation of the file paths on the current page.
+  // This acts as a highly stable dependency for our metadata preloading effect,
+  // preventing it from tearing down and restarting when irrelevant states (e.g. playback timer) update.
+  const paginatedFilePaths = useMemo(() => {
+    return paginatedFiles.map(f => f.path).join(',');
+  }, [paginatedFiles]);
 
   // Dynamic preloading of metadata for visible files
   useEffect(() => {
@@ -190,7 +203,8 @@ export default function QueueList({
         }
       });
     };
-  }, [paginatedFiles]);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [paginatedFilePaths]);
 
   const handleJumpToCurrent = () => {
     if (!currentFile) return;

@@ -56,6 +56,16 @@ export default function AudioPlayer({
   const [audioPeaks, setAudioPeaks] = useState<number[]>([]);
   const [isLoadingPeaks, setIsLoadingPeaks] = useState(false);
 
+  // Helper to get/initialize the shared AudioContext to prevent buffer-context mismatch and static/noise
+  const getSharedAudioContext = (): AudioContext | null => {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!webAudioCtxRef.current || webAudioCtxRef.current.state === 'closed') {
+      webAudioCtxRef.current = new AudioCtx();
+    }
+    return webAudioCtxRef.current;
+  };
+
   // Monitor audio binary data and extract peak amplitude nodes for real-time soundwave mapping
   useEffect(() => {
     if (!currentFile) {
@@ -85,11 +95,10 @@ export default function AudioPlayer({
         }
         const arrayBuffer = await response.arrayBuffer();
         
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (!AudioCtx) throw new Error('No AudioContext support');
-        const audioCtx = new AudioCtx();
+        const audioCtx = getSharedAudioContext();
+        if (!audioCtx) throw new Error('No AudioContext support');
         
-        // decodeAudioData
+        // decodeAudioData using the shared AudioContext (do NOT close this context!)
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
         const channelData = audioBuffer.getChannelData(0); // Left channel peak samples
         
@@ -121,7 +130,7 @@ export default function AudioPlayer({
           peaks.push(max);
         }
         
-        await audioCtx.close();
+        // Do NOT close the shared audioCtx here! It is needed for playWebAudio playback.
         
         if (active) {
           // Normalize peaks for balanced visual height
@@ -197,13 +206,8 @@ export default function AudioPlayer({
     const buffer = webAudioBufferRef.current;
     if (!buffer) return;
 
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-
-    if (!webAudioCtxRef.current || webAudioCtxRef.current.state === 'closed') {
-      webAudioCtxRef.current = new AudioCtx();
-    }
-    const ctx = webAudioCtxRef.current;
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
 
     if (ctx.state === 'suspended') {
       ctx.resume();
