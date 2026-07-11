@@ -74,19 +74,24 @@ export default function QueueList({
     }
   };
 
-  // Compute stats based only on loaded files
+  // Compute stats based only on loaded files - memoized for high efficiency
   const totalCount = files.length;
-  const labeledCount = files.filter(f => progress[f.path]?.label !== undefined && progress[f.path]?.label !== "").length;
-  const unlabeledCount = Math.max(0, totalCount - labeledCount);
-
-  // Breakdown metrics based only on loaded files
-  const labelCounts: Record<string, number> = {};
-  files.forEach(f => {
-    const prog = progress[f.path];
-    if (prog && prog.label) {
-      labelCounts[prog.label] = (labelCounts[prog.label] || 0) + 1;
+  
+  const { labeledCount, labelCounts } = useMemo(() => {
+    let count = 0;
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const prog = progress[f.path];
+      if (prog && prog.label && prog.label.trim() !== "") {
+        count++;
+        counts[prog.label] = (counts[prog.label] || 0) + 1;
+      }
     }
-  });
+    return { labeledCount: count, labelCounts: counts };
+  }, [files, progress]);
+
+  const unlabeledCount = useMemo(() => Math.max(0, totalCount - labeledCount), [totalCount, labeledCount]);
 
   // Filter queues - Memoized to prevent heavy re-filtering and identity changes on every render
   const filteredFiles = useMemo(() => {

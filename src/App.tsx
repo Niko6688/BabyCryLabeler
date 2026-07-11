@@ -201,23 +201,46 @@ export default function App() {
     };
   }, [isWaitingInterval, currentFile, files, progress, playbackMode]);
 
+  // Keep latest parameters in refs so we can sync them to the server on a stable interval
+  // without constantly tearing down and restarting the interval timer!
+  const syncParamsRef = useRef({
+    path: currentFile?.path || null,
+    name: currentFile?.name || null,
+    isPlaying,
+    isWaitingInterval,
+    waitingSecondsLeft,
+    absolutePath: currentFile?.absolutePath || null
+  });
+
+  useEffect(() => {
+    syncParamsRef.current = {
+      path: currentFile?.path || null,
+      name: currentFile?.name || null,
+      isPlaying,
+      isWaitingInterval,
+      waitingSecondsLeft,
+      absolutePath: currentFile?.absolutePath || null
+    };
+  }, [currentFile, isPlaying, isWaitingInterval, waitingSecondsLeft]);
+
   // Synchronize state with the server so external automation scripts (e.g. Python OCR helper) can perfectly orchestrate
   useEffect(() => {
     let active = true;
     const syncStatus = async () => {
       if (!active) return;
+      const params = syncParamsRef.current;
       let response: Response | null = null;
       try {
         response = await fetch('/api/update-playback-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            filePath: currentFile?.path || null,
-            fileName: currentFile?.name || null,
-            isPlaying: isPlaying,
-            isWaitingInterval: isWaitingInterval,
-            waitingSecondsLeft: waitingSecondsLeft,
-            absolutePath: currentFile?.absolutePath || null
+            filePath: params.path,
+            fileName: params.name,
+            isPlaying: params.isPlaying,
+            isWaitingInterval: params.isWaitingInterval,
+            waitingSecondsLeft: params.waitingSecondsLeft,
+            absolutePath: params.absolutePath
           })
         });
         const contentType = response.headers.get("content-type");
@@ -262,7 +285,7 @@ export default function App() {
       active = false;
       clearInterval(statusInterval);
     };
-  }, [currentFile, isPlaying, isWaitingInterval, waitingSecondsLeft]);
+  }, []);
 
   // Periodic memory clean-up (every 30 minutes)
   useEffect(() => {

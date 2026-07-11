@@ -106,7 +106,7 @@ export default function LabelingConsole({
         return;
       }
 
-      if (!currentFile) return;
+      if (!currentFileRef.current) return;
 
       // Find label matching key (1-5)
       const foundEntry = Object.entries(LABELS).find(([_, details]) =>
@@ -116,7 +116,7 @@ export default function LabelingConsole({
       if (foundEntry) {
         const [_, details] = foundEntry;
         addLog(`按键快捷键 [${e.key}] 触发: ${details.label}`, 'success');
-        onSaveLabel(details.label);
+        onSaveLabelRef.current(details.label);
       }
     };
 
@@ -124,7 +124,7 @@ export default function LabelingConsole({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [currentFile, onSaveLabel]);
+  }, []);
 
   // Reset content caches when active track changes to prevent matching stale tags on a new sound clip
   useEffect(() => {

@@ -127,18 +127,24 @@ async function startServer() {
 
   const writeProgressImmediately = () => {
     try {
-      const progressPath = path.join(process.cwd(), "progress.json");
-      const progressTmpPath = progressPath + ".tmp";
-      
-      // Deep copy progressMemory to prevent mutation during serialization
+      // Deep copy progressMemory immediately on the main thread to prevent mutation during async serialization
       const dataToSave = JSON.parse(JSON.stringify(progressMemory));
 
-      // Write progress.json atomically immediately (critical data security, no queue, no debounce)
-      fs.writeFileSync(progressTmpPath, JSON.stringify(dataToSave, null, 2), "utf-8");
-      fs.renameSync(progressTmpPath, progressPath);
-      console.log(`[Immediate Write] progress.json written successfully. Entries: ${Object.keys(dataToSave).length}`);
+      // Delegate the actual disk I/O asynchronously to our task queue to avoid blocking the Express thread
+      enqueueTask(async () => {
+        try {
+          const progressPath = path.join(process.cwd(), "progress.json");
+          const progressTmpPath = progressPath + ".tmp";
+          
+          await fs.promises.writeFile(progressTmpPath, JSON.stringify(dataToSave, null, 2), "utf-8");
+          await fs.promises.rename(progressTmpPath, progressPath);
+          console.log(`[Queue Async Write] progress.json written successfully. Entries: ${Object.keys(dataToSave).length}`);
+        } catch (err) {
+          console.error("[Queue Async Write] Error writing progress.json:", err);
+        }
+      });
     } catch (err) {
-      console.error("[Immediate Write] Error writing progress.json:", err);
+      console.error("[Immediate Write] Error compiling data for progress.json:", err);
     }
   };
 
